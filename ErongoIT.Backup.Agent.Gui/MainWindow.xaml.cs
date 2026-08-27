@@ -1,0 +1,949 @@
+using System.Collections.ObjectModel;
+using System.IO;
+using System.Text.Json;
+using System.Windows;
+using System.Windows.Controls;
+
+namespace ErongoIT.Backup.Agent.Gui;
+
+public partial class MainWindow : Window
+{
+    private readonly GuiOptions _options;
+    private readonly BackupGuiApiClient _api;
+
+    private readonly ObservableCollection<string> _folders = new();
+
+    private DeviceDto? _device;
+    private BackupPlanDto? _plan;
+    private IReadOnlyList<BackupJobDto> _jobs =
+        Array.Empty<BackupJobDto>();
+
+    private CancellationTokenSource? _backupCancellation;
+    private bool _backupRunning;
+
+    public MainWindow()
+    {
+        InitializeComponent();
+
+        _options = LoadOptions();
+
+        _api = new BackupGuiApiClient(
+            _options.ApiBaseUrl);
+
+        FolderList.ItemsSource = _folders;
+
+        SourcePathText.Text =
+            string.IsNullOrWhiteSpace(_options.SourcePath)
+                ? "Not configured"
+                : _options.SourcePath;
+
+        SettingsApiUrl.Text = _options.ApiBaseUrl;
+        SettingsCustomerId.Text = _options.CustomerId.ToString();
+        SettingsDeviceId.Text = _options.DeviceId.ToString();
+        FooterVersion.Text = "Agent 1.0.0";
+
+        if (!string.IsNullOrWhiteSpace(_options.SourcePath) &&
+            Directory.Exists(_options.SourcePath))
+        {
+            _folders.Add(_options.SourcePath);
+        }
+
+        UpdateFolderCount();
+
+        _ = LoadDataAsync();
+    }
+
+    private static GuiOptions LoadOptions()
+    {
+        var options = new GuiOptions();
+
+        var paths = new[]
+        {
+            Path.Combine(
+                AppContext.BaseDirectory,
+                "appsettings.json"),
+
+            Path.Combine(
+                AppContext.BaseDirectory,
+                "appsettings.Development.json")
+        };
+
+        foreach (var path in paths)
+        {
+            if (!File.Exists(path))
+                continue;
+
+            try
+            {
+                using var document =
+                    JsonDocument.Parse(
+                        File.ReadAllText(path));
+
+                if (!document.RootElement.TryGetProperty(
+                        "Agent",
+                        out var agent))
+                {
+                    continue;
+                }
+
+                if (agent.TryGetProperty(
+                        "ApiBaseUrl",
+                        out var apiBaseUrl))
+                {
+                    options.ApiBaseUrl =
+                        apiBaseUrl.GetString()
+                        ?? options.ApiBaseUrl;
+                }
+
+                if (agent.TryGetProperty(
+                        "CustomerId",
+                        out var customerId) &&
+                    Guid.TryParse(
+                        customerId.GetString(),
+                        out var parsedCustomerId))
+                {
+                    options.CustomerId = parsedCustomerId;
+                }
+
+                if (agent.TryGetProperty(
+                        "DeviceId",
+                        out var deviceId) &&
+                    Guid.TryParse(
+                        deviceId.GetString(),
+                        out var parsedDeviceId))
+                {
+                    options.DeviceId = parsedDeviceId;
+                }
+
+                if (agent.TryGetProperty(
+                        "SourcePath",
+                        out var sourcePath))
+                {
+                    options.SourcePath =
+                        sourcePath.GetString()
+                        ?? options.SourcePath;
+                }
+            }
+            catch
+            {
+                // Continue with values already loaded.
+            }
+        }
+
+        return options;
+    }
+
+    private async Task LoadDataAsync()
+    {
+        try
+        {
+            SetConnected(false, "Connecting...");
+
+            _device = await _api.GetDeviceAsync(
+                _options.DeviceId);
+
+            if (_device is null)
+            {
+                SetConnected(false, "Device not found");
+
+                ProtectionStatus.Text =
+                    "Device not found";
+
+                ProtectionDetails.Text =
+                    "The configured device does not exist in the Backup API.";
+
+                StatusIcon.Text = "!";
+                return;
+            }
+
+            SetConnected(true, "Connected");
+
+            DeviceName.Text =
+                string.IsNullOrWhiteSpace(_device.Name)
+                    ? _device.Hostname ?? "Unknown device"
+                    : _device.Name;
+
+            DeviceDetails.Text =
+                $"{_device.OperatingSystem ?? "Unknown OS"}" +
+                $" • {_device.Hostname ?? "No hostname"}";
+
+            if (_device.CustomerId != _options.CustomerId)
+            {
+                ProtectionStatus.Text =
+                    "Configuration error";
+
+                ProtectionDetails.Text =
+                    "The device belongs to a different customer.";
+
+                StatusIcon.Text = "!";
+                return;
+            }
+
+            if (!_device.IsActive)
+            {
+                ProtectionStatus.Text =
+                    "Protection disabled";
+
+                ProtectionDetails.Text =
+                    "This device is inactive.";
+
+                StatusIcon.Text = "!";
+                return;
+            }
+
+            if (!_device.AssignedBackupPlanId.HasValue ||
+                _device.AssignedBackupPlanId.Value == Guid.Empty)
+            {
+                ProtectionStatus.Text =
+                    "Not protected";
+
+                ProtectionDetails.Text =
+                    "No backup plan is assigned to this device.";
+
+                PlanName.Text = "No plan assigned";
+                PlanDetails.Text = "No backup plan";
+                BackupPagePlan.Text = "No plan assigned";
+                BackupPageSchedule.Text = "—";
+                BackupPageRetention.Text = "—";
+
+                StatusIcon.Text = "!";
+                return;
+            }
+
+            var plans =
+                await _api.GetBackupPlansAsync(
+                    _options.CustomerId);
+
+            _plan = plans.FirstOrDefault(
+                x => x.Id ==
+                     _device.AssignedBackupPlanId.Value);
+
+            if (_plan is null)
+            {
+                ProtectionStatus.Text =
+                    "Plan not found";
+
+                ProtectionDetails.Text =
+                    "The assigned backup plan could not be loaded.";
+
+                StatusIcon.Text = "!";
+                return;
+            }
+
+            PlanName.Text = _plan.Name;
+
+            PlanDetails.Text =
+                $"{GetScheduleDescription(_plan)} • " +
+                $"Retention {_plan.RetentionDays} days";
+
+            BackupPagePlan.Text = _plan.Name;
+            BackupPageSchedule.Text =
+                GetScheduleDescription(_plan);
+            BackupPageRetention.Text =
+                $"{_plan.RetentionDays} days";
+
+            if (!_plan.IsEnabled)
+            {
+                ProtectionStatus.Text =
+                    "Protection paused";
+
+                ProtectionDetails.Text =
+                    $"Backup plan \"{_plan.Name}\" is disabled.";
+
+                StatusIcon.Text = "!";
+            }
+            else
+            {
+                ProtectionStatus.Text =
+                    "Your computer is protected";
+
+                ProtectionDetails.Text =
+                    $"Backup plan \"{_plan.Name}\" is active.";
+
+                StatusIcon.Text = "✓";
+            }
+
+            _jobs =
+                await _api.GetBackupJobsAsync(
+                    _options.DeviceId);
+
+            UpdateLatestBackup();
+            UpdateCurrentJob();
+        }
+        catch (Exception ex)
+        {
+            SetConnected(
+                false,
+                "Connection error");
+
+            ProtectionStatus.Text =
+                "Unable to connect";
+
+            ProtectionDetails.Text =
+                ex.Message;
+
+            StatusIcon.Text = "!";
+        }
+    }
+
+    private async void BackUpNow_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        await StartManualBackupAsync();
+    }
+
+    private async Task StartManualBackupAsync()
+    {
+        if (_backupRunning)
+            return;
+
+        if (_device is null ||
+            _plan is null)
+        {
+            MessageBox.Show(
+                this,
+                "The device or backup plan has not finished loading.",
+                "ErongoIT Backup",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+
+            return;
+        }
+
+        if (!_device.IsActive)
+        {
+            MessageBox.Show(
+                this,
+                "This device is inactive.",
+                "ErongoIT Backup",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+
+            return;
+        }
+
+        if (!_plan.IsEnabled)
+        {
+            MessageBox.Show(
+                this,
+                "The assigned backup plan is disabled.",
+                "ErongoIT Backup",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+
+            return;
+        }
+
+        var folders =
+            _folders
+                .Where(Directory.Exists)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+        if (folders.Count == 0)
+        {
+            MessageBox.Show(
+                this,
+                "No backup folders are selected.",
+                "ErongoIT Backup",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+
+            return;
+        }
+
+        var existingActiveJob =
+            _jobs.FirstOrDefault(
+                x =>
+                    x.BackupPlanId == _plan.Id &&
+                    (x.Status.Equals(
+                         "Pending",
+                         StringComparison.OrdinalIgnoreCase) ||
+                     x.Status.Equals(
+                         "Running",
+                         StringComparison.OrdinalIgnoreCase)));
+
+        if (existingActiveJob is not null)
+        {
+            MessageBox.Show(
+                this,
+                $"Backup job {existingActiveJob.Id} is already running.",
+                "ErongoIT Backup",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+
+            return;
+        }
+
+        _backupCancellation =
+            new CancellationTokenSource();
+
+        _backupRunning = true;
+
+        SetBackupButtons(true);
+
+        try
+        {
+            await RunBackupAsync(
+                folders,
+                _backupCancellation.Token);
+
+            await RefreshJobsAsync();
+
+            ProtectionStatus.Text =
+                "Your files are protected";
+
+            ProtectionDetails.Text =
+                "The latest backup completed successfully.";
+
+            StatusIcon.Text = "✓";
+
+            MessageBox.Show(
+                this,
+                "Backup completed successfully.",
+                "ErongoIT Backup",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+        }
+        catch (OperationCanceledException)
+        {
+            ProtectionStatus.Text =
+                "Backup stopped";
+
+            ProtectionDetails.Text =
+                "The backup was stopped by the user.";
+
+            StatusIcon.Text = "!";
+
+            await RefreshJobsAsync();
+
+            MessageBox.Show(
+                this,
+                "The backup was stopped.",
+                "ErongoIT Backup",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            ProtectionStatus.Text =
+                "Backup failed";
+
+            ProtectionDetails.Text =
+                ex.Message;
+
+            StatusIcon.Text = "!";
+
+            await RefreshJobsAsync();
+
+            MessageBox.Show(
+                this,
+                ex.Message,
+                "Backup failed",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
+        finally
+        {
+            _backupCancellation?.Dispose();
+            _backupCancellation = null;
+
+            _backupRunning = false;
+
+            SetBackupButtons(false);
+        }
+    }
+
+    private async Task RunBackupAsync(
+        IReadOnlyList<string> folders,
+        CancellationToken cancellationToken)
+    {
+        if (_plan is null)
+            throw new InvalidOperationException(
+                "No backup plan is loaded.");
+
+        BackupProgress.Value = 0;
+        BackupProgressPercent.Text = "0%";
+        BackupProgressText.Text =
+            "Preparing backup...";
+        CurrentJobStatus.Text = "Starting";
+
+        var files = new List<BackupFile>();
+
+        foreach (var folder in folders)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (!Directory.Exists(folder))
+                continue;
+
+            foreach (var filePath in Directory.EnumerateFiles(
+                         folder,
+                         "*",
+                         SearchOption.AllDirectories))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var fileInfo =
+                    new FileInfo(filePath);
+
+                if (!fileInfo.Exists)
+                    continue;
+
+                var relativePath =
+                    Path.GetRelativePath(
+                        folder,
+                        filePath);
+
+                var folderName =
+                    new DirectoryInfo(folder).Name;
+
+                var backupPath =
+                    Path.Combine(
+                        folderName,
+                        relativePath);
+
+                files.Add(
+                    new BackupFile(
+                        filePath,
+                        backupPath,
+                        fileInfo.Length));
+            }
+        }
+
+        if (files.Count == 0)
+            throw new InvalidOperationException(
+                "No files were found in the selected folders.");
+
+        long bytesSelected =
+            files.Sum(x => x.Length);
+
+        long bytesUploaded = 0;
+        var filesUploaded = 0;
+
+        BackupProgressText.Text =
+            $"Found {files.Count:N0} file(s).";
+
+        var job =
+            await _api.CreateBackupJobAsync(
+                _options.CustomerId,
+                _options.DeviceId,
+                _plan.Id,
+                type: 1,
+                cancellationToken);
+
+        CurrentJobStatus.Text = "Starting";
+
+        await _api.StartBackupJobAsync(
+            job.Id,
+            cancellationToken);
+
+        CurrentJobStatus.Text = "Running";
+
+        try
+        {
+            foreach (var file in files)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var fileInfo =
+                    new FileInfo(file.FullPath);
+
+                if (!fileInfo.Exists)
+                    continue;
+
+                BackupProgressText.Text =
+                    $"Uploading {file.RelativePath}";
+
+                await using var stream =
+                    new FileStream(
+                        file.FullPath,
+                        FileMode.Open,
+                        FileAccess.Read,
+                        FileShare.Read,
+                        1024 * 1024,
+                        useAsync: true);
+
+                await _api.UploadFileAsync(
+                    job.Id,
+                    _options.CustomerId,
+                    _options.DeviceId,
+                    file.RelativePath,
+                    stream,
+                    Path.GetFileName(file.FullPath),
+                    cancellationToken);
+
+                bytesUploaded += file.Length;
+                filesUploaded++;
+
+                var percent =
+                    bytesSelected > 0
+                        ? bytesUploaded * 100.0 /
+                          bytesSelected
+                        : 0;
+
+                BackupProgress.Value =
+                    Math.Clamp(
+                        percent,
+                        0,
+                        100);
+
+                BackupProgressPercent.Text =
+                    $"{percent:0}%";
+
+                BackupProgressText.Text =
+                    $"{filesUploaded:N0} of {files.Count:N0} files • " +
+                    $"{FormatBytes(bytesUploaded)} of " +
+                    $"{FormatBytes(bytesSelected)}";
+            }
+
+            await _api.CompleteBackupJobAsync(
+                job.Id,
+                bytesSelected,
+                bytesUploaded,
+                cancellationToken);
+
+            BackupProgress.Value = 100;
+            BackupProgressPercent.Text = "100%";
+
+            BackupProgressText.Text =
+                $"{filesUploaded:N0} files uploaded • " +
+                $"{FormatBytes(bytesUploaded)}";
+
+            CurrentJobStatus.Text = "Completed";
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                await _api.FailBackupJobAsync(
+                    job.Id,
+                    ex.Message,
+                    CancellationToken.None);
+            }
+            catch
+            {
+                // The original failure is more important.
+            }
+
+            CurrentJobStatus.Text = "Failed";
+            throw;
+        }
+    }
+
+    private void StopBackup_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        _backupCancellation?.Cancel();
+    }
+
+    private void SetBackupButtons(
+        bool running)
+    {
+        BackUpNowButton.IsEnabled = !running;
+        BackupPageBackUpNowButton.IsEnabled = !running;
+
+        StopBackupButton.Visibility =
+            running
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+    }
+
+    private async Task RefreshJobsAsync()
+    {
+        try
+        {
+            _jobs =
+                await _api.GetBackupJobsAsync(
+                    _options.DeviceId);
+
+            UpdateLatestBackup();
+            UpdateCurrentJob();
+        }
+        catch
+        {
+            // Do not hide the original backup result.
+        }
+    }
+
+    private void UpdateLatestBackup()
+    {
+        var latest =
+            _jobs
+                .Where(x =>
+                    x.Status.Equals(
+                        "Completed",
+                        StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(
+                    x => x.CompletedAtUtc)
+                .FirstOrDefault();
+
+        if (latest is null)
+        {
+            LatestBackupText.Text =
+                "No completed backups found.";
+
+            return;
+        }
+
+        LatestBackupText.Text =
+            $"{latest.CompletedAtUtc?.ToLocalTime():dd MMM yyyy HH:mm} " +
+            $"• {FormatBytes(latest.BytesUploaded)} uploaded";
+    }
+
+    private void UpdateCurrentJob()
+    {
+        var active =
+            _jobs.FirstOrDefault(
+                x =>
+                    x.Status.Equals(
+                        "Running",
+                        StringComparison.OrdinalIgnoreCase) ||
+                    x.Status.Equals(
+                        "Pending",
+                        StringComparison.OrdinalIgnoreCase));
+
+        if (active is null)
+        {
+            if (!_backupRunning)
+            {
+                CurrentJobStatus.Text = "Idle";
+                BackupProgress.Value = 0;
+                BackupProgressPercent.Text = "0%";
+                BackupProgressText.Text =
+                    "No active backup";
+            }
+
+            return;
+        }
+
+        CurrentJobStatus.Text = active.Status;
+
+        var percent =
+            active.BytesSelected > 0
+                ? active.BytesUploaded * 100.0 /
+                  active.BytesSelected
+                : 0;
+
+        BackupProgress.Value =
+            Math.Clamp(
+                percent,
+                0,
+                100);
+
+        BackupProgressPercent.Text =
+            $"{percent:0}%";
+
+        BackupProgressText.Text =
+            $"{FormatBytes(active.BytesUploaded)} of " +
+            $"{FormatBytes(active.BytesSelected)}";
+    }
+
+    private void SetConnected(
+        bool connected,
+        string text)
+    {
+        ConnectionText.Text = text;
+
+        ConnectionIndicator.Fill =
+            connected
+                ? System.Windows.Media.Brushes.Green
+                : System.Windows.Media.Brushes.Gray;
+    }
+
+    private static string GetScheduleDescription(
+        BackupPlanDto plan)
+    {
+        var time =
+            TimeSpan
+                .FromMinutes(
+                    Math.Clamp(
+                        plan.ScheduleTimeMinutes,
+                        0,
+                        1439))
+                .ToString(@"hh\:mm");
+
+        return plan.ScheduleType switch
+        {
+            1 =>
+                $"Continuous • every {Math.Max(15, plan.IntervalMinutes)} minutes",
+
+            2 =>
+                $"Daily at {time}",
+
+            3 =>
+                $"Weekly on {GetDayName(plan.ScheduleDayOfWeek)} at {time}",
+
+            _ =>
+                "Unknown schedule"
+        };
+    }
+
+    private static string GetDayName(
+        int day)
+    {
+        return day switch
+        {
+            0 => "Sunday",
+            1 => "Monday",
+            2 => "Tuesday",
+            3 => "Wednesday",
+            4 => "Thursday",
+            5 => "Friday",
+            6 => "Saturday",
+            _ => "Unknown day"
+        };
+    }
+
+    private static string FormatBytes(
+        long bytes)
+    {
+        if (bytes < 1024)
+            return $"{bytes} B";
+
+        if (bytes < 1024 * 1024)
+            return $"{bytes / 1024.0:0.0} KB";
+
+        if (bytes < 1024L * 1024L * 1024L)
+            return $"{bytes / (1024.0 * 1024.0):0.0} MB";
+
+        return
+            $"{bytes / (1024.0 * 1024.0 * 1024.0):0.0} GB";
+    }
+
+    private void ShowView(
+        FrameworkElement view)
+    {
+        OverviewView.Visibility = Visibility.Collapsed;
+        BackupView.Visibility = Visibility.Collapsed;
+        RestoreView.Visibility = Visibility.Collapsed;
+        HistoryView.Visibility = Visibility.Collapsed;
+        SettingsView.Visibility = Visibility.Collapsed;
+
+        view.Visibility = Visibility.Visible;
+    }
+
+    private void Overview_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        ShowView(OverviewView);
+    }
+
+    private void Backup_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        ShowView(BackupView);
+    }
+
+    private void Restore_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        ShowView(RestoreView);
+    }
+
+    private void History_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        HistoryGrid.ItemsSource =
+            _jobs
+                .OrderByDescending(
+                    x => x.StartedAtUtc)
+                .Select(
+                    x => new HistoryRow(x))
+                .ToList();
+
+        ShowView(HistoryView);
+    }
+
+    private void Settings_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        ShowView(SettingsView);
+    }
+
+    private void AddFolder_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        var dialog =
+            new Microsoft.Win32.OpenFolderDialog
+            {
+                Title =
+                    "Select a folder to include in the backup.",
+                Multiselect = false
+            };
+
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        var selectedPath = dialog.FolderName;
+
+        if (string.IsNullOrWhiteSpace(selectedPath))
+        {
+            return;
+        }
+
+        if (!_folders.Contains(
+                selectedPath,
+                StringComparer.OrdinalIgnoreCase))
+        {
+            _folders.Add(selectedPath);
+            UpdateFolderCount();
+        }
+    }
+
+    private void UpdateFolderCount()
+    {
+        FolderCountText.Text =
+            _folders.Count == 1
+                ? "1 folder selected"
+                : $"{_folders.Count} folders selected";
+    }
+
+    private static string FormatDate(
+        DateTime? value)
+    {
+        return value.HasValue
+            ? value.Value
+                .ToLocalTime()
+                .ToString("dd MMM yyyy HH:mm:ss")
+            : "—";
+    }
+
+    private sealed record BackupFile(
+        string FullPath,
+        string RelativePath,
+        long Length);
+
+    private sealed class HistoryRow
+    {
+        public Guid Id { get; }
+        public string Status { get; }
+        public string StartedDisplay { get; }
+        public string CompletedDisplay { get; }
+        public string FilesDisplay { get; }
+        public string UploadedDisplay { get; }
+
+        public HistoryRow(BackupJobDto job)
+        {
+            Id = job.Id;
+            Status = job.Status;
+            StartedDisplay =
+                FormatDate(job.StartedAtUtc);
+            CompletedDisplay =
+                FormatDate(job.CompletedAtUtc);
+            FilesDisplay = "—";
+            UploadedDisplay =
+                FormatBytes(job.BytesUploaded);
+        }
+    }
+}

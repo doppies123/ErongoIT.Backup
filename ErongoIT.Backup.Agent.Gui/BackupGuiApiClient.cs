@@ -1,0 +1,258 @@
+using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Net.Http.Json;
+using System.Text.Json;
+
+namespace ErongoIT.Backup.Agent.Gui;
+
+public sealed class BackupGuiApiClient
+{
+    private readonly HttpClient _httpClient;
+
+    private static readonly JsonSerializerOptions JsonOptions =
+        new(JsonSerializerDefaults.Web);
+
+    public BackupGuiApiClient(string baseUrl)
+    {
+        _httpClient = new HttpClient
+        {
+            BaseAddress = new Uri(
+                baseUrl.TrimEnd('/') + "/"),
+            Timeout = TimeSpan.FromMinutes(30)
+        };
+    }
+
+    public async Task<DeviceDto?> GetDeviceAsync(
+        Guid deviceId,
+        CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.GetAsync(
+            $"api/devices/{deviceId}",
+            cancellationToken);
+
+        if (response.StatusCode ==
+            System.Net.HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+
+        await EnsureSuccessAsync(
+            response,
+            cancellationToken);
+
+        return await response.Content.ReadFromJsonAsync<DeviceDto>(
+            JsonOptions,
+            cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<BackupPlanDto>> GetBackupPlansAsync(
+        Guid customerId,
+        CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.GetAsync(
+            $"api/customers/{customerId}/backup-plans",
+            cancellationToken);
+
+        await EnsureSuccessAsync(
+            response,
+            cancellationToken);
+
+        return await response.Content.ReadFromJsonAsync<
+            IReadOnlyList<BackupPlanDto>>(
+                JsonOptions,
+                cancellationToken)
+            ?? Array.Empty<BackupPlanDto>();
+    }
+
+    public async Task<IReadOnlyList<BackupJobDto>> GetBackupJobsAsync(
+        Guid deviceId,
+        CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.GetAsync(
+            $"api/devices/{deviceId}/backup-jobs",
+            cancellationToken);
+
+        await EnsureSuccessAsync(
+            response,
+            cancellationToken);
+
+        return await response.Content.ReadFromJsonAsync<
+            IReadOnlyList<BackupJobDto>>(
+                JsonOptions,
+                cancellationToken)
+            ?? Array.Empty<BackupJobDto>();
+    }
+
+    public async Task<BackupJobDto> CreateBackupJobAsync(
+        Guid customerId,
+        Guid deviceId,
+        Guid backupPlanId,
+        int type,
+        CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync(
+            $"api/customers/{customerId}/backup-jobs",
+            new
+            {
+                deviceId,
+                backupPlanId,
+                type
+            },
+            JsonOptions,
+            cancellationToken);
+
+        await EnsureSuccessAsync(
+            response,
+            cancellationToken);
+
+        return await response.Content.ReadFromJsonAsync<BackupJobDto>(
+                   JsonOptions,
+                   cancellationToken)
+               ?? throw new InvalidOperationException(
+                   "Backup API returned an empty backup job.");
+    }
+
+    public async Task StartBackupJobAsync(
+        Guid backupJobId,
+        CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsync(
+            $"api/backup-jobs/{backupJobId}/start",
+            null,
+            cancellationToken);
+
+        await EnsureSuccessAsync(
+            response,
+            cancellationToken);
+    }
+
+    public async Task UploadFileAsync(
+        Guid backupJobId,
+        Guid customerId,
+        Guid deviceId,
+        string relativePath,
+        System.IO.Stream content,
+        string fileName,
+        CancellationToken cancellationToken = default)
+    {
+        if (content is null)
+            throw new ArgumentNullException(nameof(content));
+
+        using var form = new MultipartFormDataContent();
+        using var streamContent = new StreamContent(content);
+
+        streamContent.Headers.ContentType =
+            new MediaTypeHeaderValue(
+                "application/octet-stream");
+
+        form.Add(
+            streamContent,
+            "file",
+            fileName);
+
+        var url =
+            $"api/backup-jobs/{backupJobId}/files" +
+            $"?customerId={Uri.EscapeDataString(customerId.ToString())}" +
+            $"&deviceId={Uri.EscapeDataString(deviceId.ToString())}" +
+            $"&relativePath={Uri.EscapeDataString(relativePath)}";
+
+        var response = await _httpClient.PostAsync(
+            url,
+            form,
+            cancellationToken);
+
+        await EnsureSuccessAsync(
+            response,
+            cancellationToken);
+    }
+
+    public async Task CompleteBackupJobAsync(
+        Guid backupJobId,
+        long bytesSelected,
+        long bytesUploaded,
+        CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync(
+            $"api/backup-jobs/{backupJobId}/complete",
+            new
+            {
+                bytesSelected,
+                bytesUploaded
+            },
+            JsonOptions,
+            cancellationToken);
+
+        await EnsureSuccessAsync(
+            response,
+            cancellationToken);
+    }
+
+    public async Task FailBackupJobAsync(
+        Guid backupJobId,
+        string errorMessage,
+        CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync(
+            $"api/backup-jobs/{backupJobId}/fail",
+            new
+            {
+                errorMessage
+            },
+            JsonOptions,
+            cancellationToken);
+
+        await EnsureSuccessAsync(
+            response,
+            cancellationToken);
+    }
+
+    private static async Task EnsureSuccessAsync(
+        HttpResponseMessage response,
+        CancellationToken cancellationToken)
+    {
+        if (response.IsSuccessStatusCode)
+            return;
+
+        var body = await response.Content.ReadAsStringAsync(
+            cancellationToken);
+
+        throw new HttpRequestException(
+            $"Backup API request failed with HTTP " +
+            $"{(int)response.StatusCode}: {body}");
+    }
+}
+
+public sealed record DeviceDto(
+    Guid Id,
+    Guid CustomerId,
+    string Name,
+    string? Hostname,
+    string? OperatingSystem,
+    string? AgentVersion,
+    DateTime? LastSeenAtUtc,
+    bool IsActive,
+    Guid? AssignedBackupPlanId);
+
+public sealed record BackupPlanDto(
+    Guid Id,
+    Guid CustomerId,
+    string Name,
+    int ScheduleType,
+    int IntervalMinutes,
+    int ScheduleTimeMinutes,
+    int ScheduleDayOfWeek,
+    int RetentionDays,
+    bool IsEnabled);
+
+public sealed record BackupJobDto(
+    Guid Id,
+    Guid CustomerId,
+    Guid DeviceId,
+    Guid BackupPlanId,
+    int Type,
+    DateTime StartedAtUtc,
+    DateTime? CompletedAtUtc,
+    long BytesSelected,
+    long BytesUploaded,
+    string Status,
+    string? ErrorMessage);

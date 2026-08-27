@@ -1,0 +1,249 @@
+@page
+@model IndexModel
+
+@{
+    ViewData["Title"] = "Dashboard";
+}
+
+<div class="page-header">
+    <div>
+        <div class="eyebrow">ERONGOIT BACKUP</div>
+        <h1>Dashboard</h1>
+        <p class="page-description">
+            Backup infrastructure overview and system status.
+        </p>
+    </div>
+
+    <div class="api-status">
+        <span class="status-dot @(Model.Health?.Status == "Healthy" ? "online" : "offline")"></span>
+        <span>
+            API
+            <strong>
+                @(Model.Health?.Status ?? "Unavailable")
+            </strong>
+        </span>
+    </div>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(Model.LoadError))
+{
+    <div class="dashboard-error">
+        <strong>Dashboard connection error</strong>
+        <span>@Model.LoadError</span>
+    </div>
+}
+
+<div class="stat-grid">
+    <div class="stat-card">
+        <span class="stat-label">Customers</span>
+        <strong class="stat-value">@Model.Customers.Count</strong>
+        <span class="stat-detail">Configured customers</span>
+    </div>
+
+    <div class="stat-card">
+        <span class="stat-label">Devices</span>
+        <strong class="stat-value">@Model.Devices.Count</strong>
+        <span class="stat-detail">@Model.OnlineDevices currently online</span>
+    </div>
+
+    <div class="stat-card">
+        <span class="stat-label">Backup Plans</span>
+        <strong class="stat-value">@Model.BackupPlans.Count</strong>
+        <span class="stat-detail">@Model.BackupPlans.Count(x => x.IsEnabled) enabled</span>
+    </div>
+
+    <div class="stat-card">
+        <span class="stat-label">Completed Jobs</span>
+        <strong class="stat-value">@Model.CompletedJobs</strong>
+        <span class="stat-detail">@Model.RunningJobs running</span>
+    </div>
+</div>
+
+<div class="dashboard-grid">
+    <section class="panel">
+        <div class="panel-header">
+            <div>
+                <h2>Devices</h2>
+                <p>Agent connectivity and heartbeat status.</p>
+            </div>
+        </div>
+
+        @if (Model.Devices.Count == 0)
+        {
+            <div class="empty-state">
+                No devices found.
+            </div>
+        }
+        else
+        {
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Device</th>
+                            <th>Operating System</th>
+                            <th>Agent</th>
+                            <th>Last Seen</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    @foreach (var device in Model.Devices)
+                    {
+                        var online = device.IsActive &&
+                                     device.LastSeenAtUtc.HasValue &&
+                                     DateTime.UtcNow - device.LastSeenAtUtc.Value
+                                         < TimeSpan.FromMinutes(2);
+
+                        <tr>
+                            <td>
+                                <strong>@device.Name</strong>
+                                @if (!string.IsNullOrWhiteSpace(device.Hostname))
+                                {
+                                    <small>@device.Hostname</small>
+                                }
+                            </td>
+                            <td>@(device.OperatingSystem ?? "Unknown")</td>
+                            <td>@(device.AgentVersion ?? "Unknown")</td>
+                            <td>
+                                @(device.LastSeenAtUtc?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
+                                    ?? "Never")
+                            </td>
+                            <td>
+                                <span class="badge @(online ? "badge-success" : "badge-muted")">
+                                    @(online ? "Online" : "Offline")
+                                </span>
+                            </td>
+                        </tr>
+                    }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+
+    <section class="panel">
+        <div class="panel-header">
+            <div>
+                <h2>Backup Plans</h2>
+                <p>Configured schedules.</p>
+            </div>
+        </div>
+
+        @if (Model.BackupPlans.Count == 0)
+        {
+            <div class="empty-state">
+                No backup plans found.
+            </div>
+        }
+        else
+        {
+            <div class="plan-list">
+            @foreach (var plan in Model.BackupPlans)
+            {
+                <div class="plan-row">
+                    <div>
+                        <strong>@plan.Name</strong>
+                        <span>
+                            Every @plan.IntervalMinutes minutes
+                            · Retain @plan.RetentionDays days
+                        </span>
+                    </div>
+
+                    <span class="badge @(plan.IsEnabled ? "badge-success" : "badge-muted")">
+                        @(plan.IsEnabled ? "Enabled" : "Disabled")
+                    </span>
+                </div>
+            }
+            </div>
+        }
+    </section>
+</div>
+
+<section class="panel jobs-panel">
+    <div class="panel-header">
+        <div>
+            <h2>Recent Backup Jobs</h2>
+            <p>Activity reported by backup agents.</p>
+        </div>
+
+        <div class="job-summary">
+            <span class="badge badge-success">@Model.CompletedJobs completed</span>
+            <span class="badge badge-running">@Model.RunningJobs running</span>
+            <span class="badge badge-danger">@Model.FailedJobs failed</span>
+        </div>
+    </div>
+
+    @if (Model.BackupJobs.Count == 0)
+    {
+        <div class="empty-state">
+            No backup jobs found.
+        </div>
+    }
+    else
+    {
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Started</th>
+                        <th>Status</th>
+                        <th>Selected</th>
+                        <th>Uploaded</th>
+                        <th>Completed</th>
+                    </tr>
+                </thead>
+                <tbody>
+                @foreach (var job in Model.BackupJobs
+                    .OrderByDescending(x => x.StartedAtUtc)
+                    .Take(10))
+                {
+                    <tr>
+                        <td>
+                            @job.StartedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
+                        </td>
+                        <td>
+                            @{
+                                var badgeClass = job.Status.ToLowerInvariant() switch
+                                {
+                                    "completed" => "badge-success",
+                                    "running" => "badge-running",
+                                    "failed" => "badge-danger",
+                                    "cancelled" => "badge-muted",
+                                    _ => "badge-muted"
+                                };
+                            }
+
+                            <span class="badge @badgeClass">
+                                @job.Status
+                            </span>
+                        </td>
+                        <td>@FormatBytes(job.BytesSelected)</td>
+                        <td>@FormatBytes(job.BytesUploaded)</td>
+                        <td>
+                            @(job.CompletedAtUtc?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
+                                ?? "—")
+                        </td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        </div>
+    }
+</section>
+
+@functions {
+    private static string FormatBytes(long bytes)
+    {
+        if (bytes < 1024)
+            return $"{bytes} B";
+
+        if (bytes < 1024 * 1024)
+            return $"{bytes / 1024d:0.##} KB";
+
+        if (bytes < 1024L * 1024L * 1024L)
+            return $"{bytes / (1024d * 1024d):0.##} MB";
+
+        return $"{bytes / (1024d * 1024d * 1024d):0.##} GB";
+    }
+}

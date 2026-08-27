@@ -1,0 +1,378 @@
+@page
+@model BackupJobsModel
+
+@{
+    ViewData["Title"] = "Backup Jobs";
+}
+
+<div class="page-header">
+    <div>
+        <div class="eyebrow">ERONGOIT BACKUP</div>
+        <h1>Backup Jobs</h1>
+        <p class="page-description">
+            Monitor and manage backup operations across protected devices.
+        </p>
+    </div>
+
+    <div class="api-status">
+        <span class="status-dot @(Model.Health?.Status == "Healthy" ? "online" : "offline")"></span>
+        <span>
+            API
+            <strong>
+                @(Model.Health?.Status ?? "Unavailable")
+            </strong>
+        </span>
+    </div>
+</div>
+
+@if (TempData["SuccessMessage"] is string successMessage)
+{
+    <div class="alert alert-success dashboard-alert">
+        @successMessage
+    </div>
+}
+
+@if (TempData["ErrorMessage"] is string errorMessage)
+{
+    <div class="alert alert-danger dashboard-alert">
+        <strong>Unable to complete the request.</strong>
+        <div>@errorMessage</div>
+    </div>
+}
+
+@if (!ViewData.ModelState.IsValid)
+{
+    <div class="alert alert-danger dashboard-alert">
+        <strong>Unable to complete the request.</strong>
+
+        <ul>
+        @foreach (var error in ViewData.ModelState.Values
+            .SelectMany(x => x.Errors))
+        {
+            <li>@error.ErrorMessage</li>
+        }
+        </ul>
+    </div>
+}
+
+<section class="panel customer-create-panel">
+    <div class="panel-header">
+        <div>
+            <h2>Create Backup Job</h2>
+            <p>Create a backup operation for a protected device.</p>
+        </div>
+    </div>
+
+    @if (Model.Customers.Count == 0)
+    {
+        <div class="empty-state">
+            Create a customer before creating a backup job.
+        </div>
+    }
+    else if (Model.Devices.Count == 0)
+    {
+        <div class="empty-state">
+            Register a device before creating a backup job.
+        </div>
+    }
+    else if (Model.BackupPlans.Count == 0)
+    {
+        <div class="empty-state">
+            Create and enable a backup plan before creating a backup job.
+        </div>
+    }
+    else
+    {
+        <form method="post"
+              asp-page-handler="Create"
+              class="customer-form backup-job-form">
+
+            <div class="customer-form-field">
+                <label asp-for="CreateJob.CustomerId">
+                    Customer
+                </label>
+
+                <select asp-for="CreateJob.CustomerId"
+                        id="backupJobCustomer"
+                        class="form-control">
+
+                    <option value="">Select customer</option>
+
+                    @foreach (var customer in Model.Customers)
+                    {
+                        <option value="@customer.Id">
+                            @customer.Name
+                        </option>
+                    }
+                </select>
+            </div>
+
+            <div class="customer-form-field">
+                <label asp-for="CreateJob.DeviceId">
+                    Device
+                </label>
+
+                <select asp-for="CreateJob.DeviceId"
+                        id="backupJobDevice"
+                        class="form-control">
+
+                    <option value="">Select device</option>
+
+                    @foreach (var device in Model.Devices)
+                    {
+                        <option value="@device.Id"
+                                data-customer-id="@device.CustomerId">
+                            @device.Name
+                        </option>
+                    }
+                </select>
+            </div>
+
+            <div class="customer-form-field">
+                <label asp-for="CreateJob.BackupPlanId">
+                    Backup Plan
+                </label>
+
+                <select asp-for="CreateJob.BackupPlanId"
+                        id="backupJobPlan"
+                        class="form-control">
+
+                    <option value="">Select backup plan</option>
+
+                    @foreach (var plan in Model.BackupPlans)
+                    {
+                        <option value="@plan.Id"
+                                data-customer-id="@plan.CustomerId">
+                            @plan.Name
+                        </option>
+                    }
+                </select>
+            </div>
+
+            <div class="customer-form-field">
+                <label asp-for="CreateJob.Type">
+                    Backup Type
+                </label>
+
+                <select asp-for="CreateJob.Type"
+                        class="form-control">
+
+                    <option value="1">File</option>
+                    <option value="2">Database</option>
+                    <option value="3">System</option>
+                </select>
+            </div>
+
+            <div class="customer-form-action">
+                <button type="submit"
+                        class="btn btn-primary">
+                    Create Job
+                </button>
+            </div>
+        </form>
+    }
+</section>
+
+<section class="panel">
+    <div class="panel-header">
+        <div>
+            <h2>Backup Job History</h2>
+            <p>Backup operations reported by protected devices.</p>
+        </div>
+
+        <span class="badge badge-muted">
+            @Model.BackupJobs.Count job@(Model.BackupJobs.Count == 1 ? "" : "s")
+        </span>
+    </div>
+
+    @if (Model.BackupJobs.Count == 0)
+    {
+        <div class="empty-state">
+            No backup jobs found.
+        </div>
+    }
+    else
+    {
+        <div class="table-wrap">
+            <table class="customers-table">
+                <thead>
+                    <tr>
+                        <th>Device</th>
+                        <th>Customer</th>
+                        <th>Plan</th>
+                        <th>Type</th>
+                        <th>Started</th>
+                        <th>Completed</th>
+                        <th>Data</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                @foreach (var item in Model.BackupJobs)
+                {
+                    var statusClass =
+                        item.Job.Status.Equals(
+                            "Completed",
+                            StringComparison.OrdinalIgnoreCase)
+                            ? "badge-success"
+                            : item.Job.Status.Equals(
+                                "Failed",
+                                StringComparison.OrdinalIgnoreCase)
+                                ? "badge-danger"
+                                : item.Job.Status.Equals(
+                                    "Running",
+                                    StringComparison.OrdinalIgnoreCase)
+                                    ? "badge-running"
+                                    : "badge-muted";
+
+                    <tr>
+                        <td>
+                            <strong>@item.Device.Name</strong>
+
+                            @if (!string.IsNullOrWhiteSpace(item.Device.Hostname))
+                            {
+                                <small>@item.Device.Hostname</small>
+                            }
+                        </td>
+
+                        <td>
+                            @item.Customer.Name
+                        </td>
+
+                        <td>
+                            @(item.Plan?.Name ?? "Unknown")
+                        </td>
+
+                        <td>
+                            @item.TypeName
+                        </td>
+
+                        <td>
+                            @item.Job.StartedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
+                        </td>
+
+                        <td>
+                            @(item.Job.CompletedAtUtc?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") ?? "—")
+                        </td>
+
+                        <td>
+                            <small>
+                                Selected:
+                                @FormatBytes(item.Job.BytesSelected)
+                            </small>
+
+                            <small>
+                                Uploaded:
+                                @FormatBytes(item.Job.BytesUploaded)
+                            </small>
+                        </td>
+
+                        <td>
+                            <span class="badge @statusClass">
+                                @item.Job.Status
+                            </span>
+
+                            @if (!string.IsNullOrWhiteSpace(item.Job.ErrorMessage))
+                            {
+                                <small>@item.Job.ErrorMessage</small>
+                            }
+                        </td>
+
+                        <td>
+                            <div class="customer-actions">
+                                <form method="post" asp-page-handler="ClearHistory">
+                                    <input type="hidden" name="deviceId" value="@item.Device.Id" />
+                                    <button type="submit" class="btn btn-sm btn-outline-danger"
+                                            onclick="return confirm('Clear ALL backup job history for this device? This cannot be undone.');">
+                                        Clear History
+                                    </button>
+                                </form>
+
+
+                                @if (item.Job.Status.Equals("Pending", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    <form method="post" asp-page-handler="Start">
+                                        <input type="hidden" name="backupJobId" value="@item.Job.Id" />
+                                        <button type="submit" class="btn btn-sm btn-outline-success">
+                                            Start
+                                        </button>
+                                    </form>
+                                }
+
+                                @if (item.Job.Status.Equals("Pending", StringComparison.OrdinalIgnoreCase) ||
+                                    item.Job.Status.Equals("Running", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    <form method="post" asp-page-handler="Cancel">
+                                        <input type="hidden" name="backupJobId" value="@item.Job.Id" />
+                                        <button type="submit" class="btn btn-sm btn-outline-danger">
+                                            Cancel
+                                        </button>
+                                    </form>
+
+                                    <form method="post" asp-page-handler="RecoverStale">
+                                        <input type="hidden" name="deviceId" value="@item.Device.Id" />
+                                        <button type="submit" class="btn btn-sm btn-outline-secondary">
+                                            Recover Stale
+                                        </button>
+                                    </form>
+                                }
+
+                            </div>
+                        </td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        </div>
+    }
+</section>
+
+@functions {
+    private static string FormatBytes(long bytes)
+    {
+        if (bytes < 1024)
+            return $"{bytes} B";
+
+        if (bytes < 1024 * 1024)
+            return $"{bytes / 1024.0:0.0} KB";
+
+        if (bytes < 1024L * 1024L * 1024L)
+            return $"{bytes / (1024.0 * 1024.0):0.0} MB";
+
+        return $"{bytes / (1024.0 * 1024.0 * 1024.0):0.0} GB";
+    }
+}
+
+@section Scripts {
+<script>
+    document.addEventListener("DOMContentLoaded", function () {
+        const customerSelect = document.getElementById("backupJobCustomer");
+        const deviceSelect = document.getElementById("backupJobDevice");
+        const planSelect = document.getElementById("backupJobPlan");
+
+        function filterSelect(select) {
+            const customerId = customerSelect.value.toLowerCase();
+
+            for (const option of select.options) {
+                if (!option.dataset.customerId) {
+                    option.hidden = false;
+                    continue;
+                }
+
+                option.hidden =
+                    option.dataset.customerId.toLowerCase() !== customerId;
+            }
+        }
+
+        function update() {
+            filterSelect(deviceSelect);
+            filterSelect(planSelect);
+        }
+
+        customerSelect.addEventListener("change", update);
+        update();
+    });
+</script>
+}

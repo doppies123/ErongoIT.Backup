@@ -1,0 +1,800 @@
+@page
+@using ErongoIT.Backup.Web.Services
+@model BackupPlansModel
+
+@{
+    ViewData["Title"] = "Backup Plans";
+}
+
+<div class="page-header">
+    <div>
+        <div class="eyebrow">ERONGOIT BACKUP</div>
+        <h1>Backup Plans</h1>
+        <p class="page-description">
+            Configure backup schedules and retention policies.
+        </p>
+    </div>
+
+    <div class="api-status">
+        <span class="status-dot @(Model.Health?.Status == "Healthy" ? "online" : "offline")"></span>
+        <span>
+            API
+            <strong>
+                @(Model.Health?.Status ?? "Unavailable")
+            </strong>
+        </span>
+    </div>
+</div>
+
+@if (TempData["SuccessMessage"] is string successMessage)
+{
+    <div class="alert alert-success dashboard-alert">
+        @successMessage
+    </div>
+}
+
+@if (TempData["ErrorMessage"] is string errorMessage)
+{
+    <div class="alert alert-danger dashboard-alert">
+        @errorMessage
+    </div>
+}
+
+@if (!ViewData.ModelState.IsValid)
+{
+    <div class="alert alert-danger dashboard-alert">
+        <strong>Unable to complete the request.</strong>
+
+        <ul>
+        @foreach (var error in ViewData.ModelState.Values
+            .SelectMany(x => x.Errors))
+        {
+            <li>@error.ErrorMessage</li>
+        }
+        </ul>
+    </div>
+}
+
+<section class="panel customer-create-panel">
+    <div class="panel-header">
+        <div>
+            <h2>Create Backup Plan</h2>
+            <p>
+                Define the schedule and how long completed backups are retained.
+            </p>
+        </div>
+    </div>
+
+    @if (Model.Customers.Count == 0)
+    {
+        <div class="empty-state">
+            Create a customer before creating a backup plan.
+        </div>
+    }
+    else
+    {
+        <form method="post"
+              asp-page-handler="Create"
+              class="customer-form">
+
+            <div class="customer-form-field">
+                <label asp-for="CreatePlan.CustomerId">
+                    Customer
+                </label>
+
+                <select asp-for="CreatePlan.CustomerId"
+                        class="form-control">
+
+                    <option value="">
+                        Select customer
+                    </option>
+
+                    @foreach (var customer in Model.Customers)
+                    {
+                        <option value="@customer.Id">
+                            @customer.Name
+                        </option>
+                    }
+                </select>
+            </div>
+
+            <div class="customer-form-field">
+                <label asp-for="CreatePlan.Name">
+                    Plan Name
+                </label>
+
+                <input asp-for="CreatePlan.Name"
+                       class="form-control"
+                       placeholder="e.g. Workstation Protection" />
+            </div>
+
+            <div class="customer-form-field">
+                <label asp-for="CreatePlan.ScheduleType">
+                    Schedule
+                </label>
+
+                <select asp-for="CreatePlan.ScheduleType"
+                        id="createScheduleType"
+                        class="form-control"
+                        onchange="updateCreateScheduleFields()">
+
+                    <option value="1">Continuous</option>
+                    <option value="2">Daily</option>
+                    <option value="3">Weekly</option>
+                </select>
+
+                <small id="createScheduleHelp"
+                       class="form-help">
+                    Back up repeatedly using a configurable interval.
+                </small>
+            </div>
+
+            <div class="customer-form-field"
+                 id="createIntervalField">
+
+                <label asp-for="CreatePlan.IntervalMinutes">
+                    Backup Interval
+                </label>
+
+                <input asp-for="CreatePlan.IntervalMinutes"
+                       type="number"
+                       min="15"
+                       step="15"
+                       class="form-control" />
+
+                <small class="form-help">
+                    Minimum 15 minutes.
+                </small>
+            </div>
+
+            <div class="customer-form-field"
+                 id="createDayField"
+                 style="display:none;">
+
+                <label asp-for="CreatePlan.ScheduleDayOfWeek">
+                    Day
+                </label>
+
+                <select asp-for="CreatePlan.ScheduleDayOfWeek"
+                        id="createScheduleDay"
+                        class="form-control">
+
+                    <option value="0">Sunday</option>
+                    <option value="1">Monday</option>
+                    <option value="2">Tuesday</option>
+                    <option value="3">Wednesday</option>
+                    <option value="4">Thursday</option>
+                    <option value="5">Friday</option>
+                    <option value="6">Saturday</option>
+                </select>
+            </div>
+
+            <div class="customer-form-field"
+                 id="createTimeField"
+                 style="display:none;">
+
+                <label for="createScheduleTime">
+                    Time
+                </label>
+
+                <input id="createScheduleTime"
+                       type="time"
+                       class="form-control"
+                       value="00:00" />
+
+                <small class="form-help">
+                    The time is stored as minutes after midnight.
+                </small>
+
+                <input asp-for="CreatePlan.ScheduleTimeMinutes"
+                       type="hidden"
+                       id="createScheduleTimeMinutes" />
+            </div>
+
+            <div class="customer-form-field">
+                <label asp-for="CreatePlan.RetentionDays">
+                    Retention
+                </label>
+
+                <input asp-for="CreatePlan.RetentionDays"
+                       type="number"
+                       min="1"
+                       class="form-control" />
+
+                <small class="form-help">
+                    Number of days to retain completed backups.
+                </small>
+            </div>
+
+            <div class="customer-form-action">
+                <button type="submit"
+                        class="btn btn-primary">
+                    Create Plan
+                </button>
+            </div>
+        </form>
+    }
+</section>
+
+<section class="panel">
+    <div class="panel-header">
+        <div>
+            <h2>Configured Backup Plans</h2>
+            <p>
+                Schedules currently configured on the backup server.
+            </p>
+        </div>
+
+        <span class="badge badge-muted">
+            @Model.BackupPlans.Count plan@(Model.BackupPlans.Count == 1 ? "" : "s")
+        </span>
+    </div>
+
+    @if (Model.BackupPlans.Count == 0)
+    {
+        <div class="empty-state">
+            No backup plans found.
+        </div>
+    }
+    else
+    {
+        <div class="table-wrap">
+            <table class="customers-table">
+                <thead>
+                    <tr>
+                        <th>Plan</th>
+                        <th>Customer</th>
+                        <th>Schedule</th>
+                        <th>Retention</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                @foreach (var plan in Model.BackupPlans)
+                {
+                    var customer = Model.Customers
+                        .FirstOrDefault(x => x.Id == plan.CustomerId);
+
+                    <tr>
+                        <td>
+                            <strong>@plan.Name</strong>
+                        </td>
+
+                        <td>
+                            @(customer?.Name ?? "Unknown")
+                        </td>
+
+                        <td>
+                            @ScheduleDescription(plan)
+                        </td>
+
+                        <td>
+                            @plan.RetentionDays day@(plan.RetentionDays == 1 ? "" : "s")
+                        </td>
+
+                        <td>
+                            <span class="badge @(plan.IsEnabled
+                                ? "badge-success"
+                                : "badge-muted")">
+                                @(plan.IsEnabled ? "Enabled" : "Disabled")
+                            </span>
+                        </td>
+
+                        <td>
+                            <div class="customer-actions">
+
+                                <button type="button"
+                                        class="btn btn-sm btn-outline-primary"
+                                        onclick="showEditPlan(
+                                            '@plan.Id',
+                                            '@plan.ScheduleType',
+                                            '@plan.IntervalMinutes',
+                                            '@plan.ScheduleTimeMinutes',
+                                            '@plan.ScheduleDayOfWeek',
+                                            '@plan.RetentionDays')">
+                                    Edit
+                                </button>
+
+                                @if (plan.IsEnabled)
+                                {
+                                    <form method="post"
+                                          asp-page-handler="Disable">
+
+                                        <input type="hidden"
+                                               name="backupPlanId"
+                                               value="@plan.Id" />
+
+                                        <button type="submit"
+                                                class="btn btn-sm btn-outline-danger">
+                                            Disable
+                                        </button>
+                                    </form>
+                                }
+                                else
+                                {
+                                    <form method="post"
+                                          asp-page-handler="Enable">
+
+                                        <input type="hidden"
+                                               name="backupPlanId"
+                                               value="@plan.Id" />
+
+                                        <button type="submit"
+                                                class="btn btn-sm btn-outline-success">
+                                            Enable
+                                        </button>
+                                    </form>
+                                }
+                            </div>
+                        </td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        </div>
+    }
+</section>
+
+<div id="editPlanDialog"
+     class="modal-backdrop-custom"
+     style="display:none;">
+
+    <div class="modal-card-custom">
+
+        <div class="panel-header">
+            <div>
+                <h2>Edit Backup Plan</h2>
+                <p>
+                    Change the schedule and retention period.
+                </p>
+            </div>
+        </div>
+
+        <form method="post"
+              asp-page-handler="Update">
+
+            <input type="hidden"
+                   id="editPlanId"
+                   name="EditPlan.BackupPlanId" />
+
+            <input type="hidden"
+                   id="editScheduleTimeMinutes"
+                   name="EditPlan.ScheduleTimeMinutes" />
+
+            <div class="modal-body-custom">
+
+                <div class="customer-form-field">
+                    <label for="editScheduleType">
+                        Schedule
+                    </label>
+
+                    <select id="editScheduleType"
+                            name="EditPlan.ScheduleType"
+                            class="form-control"
+                            onchange="updateEditScheduleFields()">
+
+                        <option value="1">Continuous</option>
+                        <option value="2">Daily</option>
+                        <option value="3">Weekly</option>
+                    </select>
+
+                    <small id="editScheduleHelp"
+                           class="form-help">
+                        Back up repeatedly using a configurable interval.
+                    </small>
+                </div>
+
+                <div class="customer-form-field"
+                     id="editIntervalField">
+
+                    <label for="editPlanInterval">
+                        Backup Interval
+                    </label>
+
+                    <input id="editPlanInterval"
+                           name="EditPlan.IntervalMinutes"
+                           type="number"
+                           min="15"
+                           step="15"
+                           class="form-control"
+                           required />
+
+                    <small class="form-help">
+                        Minimum 15 minutes.
+                    </small>
+                </div>
+
+                <div class="customer-form-field"
+                     id="editDayField"
+                     style="display:none;">
+
+                    <label for="editScheduleDay">
+                        Day
+                    </label>
+
+                    <select id="editScheduleDay"
+                            name="EditPlan.ScheduleDayOfWeek"
+                            class="form-control">
+
+                        <option value="0">Sunday</option>
+                        <option value="1">Monday</option>
+                        <option value="2">Tuesday</option>
+                        <option value="3">Wednesday</option>
+                        <option value="4">Thursday</option>
+                        <option value="5">Friday</option>
+                        <option value="6">Saturday</option>
+                    </select>
+                </div>
+
+                <div class="customer-form-field"
+                     id="editTimeField"
+                     style="display:none;">
+
+                    <label for="editScheduleTime">
+                        Time
+                    </label>
+
+                    <input id="editScheduleTime"
+                           type="time"
+                           class="form-control"
+                           value="00:00" />
+                </div>
+
+                <div class="customer-form-field">
+                    <label for="editPlanRetention">
+                        Retention Days
+                    </label>
+
+                    <input id="editPlanRetention"
+                           name="EditPlan.RetentionDays"
+                           type="number"
+                           min="1"
+                           class="form-control"
+                           required />
+                </div>
+
+            </div>
+
+            <div class="modal-actions-custom">
+
+                <button type="button"
+                        class="btn btn-outline-secondary"
+                        onclick="hideEditPlan()">
+                    Cancel
+                </button>
+
+                <button type="submit"
+                        class="btn btn-primary">
+                    Save Changes
+                </button>
+
+            </div>
+        </form>
+    </div>
+</div>
+
+@functions {
+    private static string ScheduleDescription(
+        BackupPlan plan)
+    {
+        return plan.ScheduleType switch
+        {
+            1 => $"Every {plan.IntervalMinutes} minutes",
+
+            2 => $"Daily at {FormatScheduleTime(plan.ScheduleTimeMinutes)}",
+
+            3 => $"Weekly {GetDayName(plan.ScheduleDayOfWeek)} at {FormatScheduleTime(plan.ScheduleTimeMinutes)}",
+
+            _ => "Unknown schedule"
+        };
+    }
+
+    private static string FormatScheduleTime(
+        int minutes)
+    {
+        minutes = Math.Clamp(minutes, 0, 1439);
+
+        var hours = minutes / 60;
+        var mins = minutes % 60;
+
+        return $"{hours:00}:{mins:00}";
+    }
+
+    private static string GetDayName(
+        int day)
+    {
+        return day switch
+        {
+            0 => "Sunday",
+            1 => "Monday",
+            2 => "Tuesday",
+            3 => "Wednesday",
+            4 => "Thursday",
+            5 => "Friday",
+            6 => "Saturday",
+            _ => "Unknown"
+        };
+    }
+}
+
+@section Scripts {
+<script>
+    function timeToMinutes(value) {
+        if (!value) {
+            return 0;
+        }
+
+        const parts = value.split(":");
+
+        if (parts.length !== 2) {
+            return 0;
+        }
+
+        const hours = Number(parts[0]);
+        const minutes = Number(parts[1]);
+
+        if (!Number.isFinite(hours) ||
+            !Number.isFinite(minutes)) {
+            return 0;
+        }
+
+        return (hours * 60) + minutes;
+    }
+
+    function minutesToTime(minutes) {
+        minutes = Number(minutes);
+
+        if (!Number.isFinite(minutes)) {
+            minutes = 0;
+        }
+
+        minutes = Math.max(
+            0,
+            Math.min(1439, Math.trunc(minutes)));
+
+        const hours =
+            Math.floor(minutes / 60);
+
+        const mins =
+            minutes % 60;
+
+        return String(hours).padStart(2, "0") +
+            ":" +
+            String(mins).padStart(2, "0");
+    }
+
+    function updateCreateScheduleFields() {
+        const type =
+            document.getElementById("createScheduleType").value;
+
+        const intervalField =
+            document.getElementById("createIntervalField");
+
+        const intervalInput =
+            document.getElementById("CreatePlan_IntervalMinutes");
+
+        const dayField =
+            document.getElementById("createDayField");
+
+        const timeField =
+            document.getElementById("createTimeField");
+
+        const interval =
+            document.getElementById("createScheduleTimeMinutes");
+
+        const timeInput =
+            document.getElementById("createScheduleTime");
+
+        const help =
+            document.getElementById("createScheduleHelp");
+
+        if (type === "1") {
+            intervalField.style.display = "";
+            intervalInput.disabled = false;
+            intervalInput.required = true;
+
+            dayField.style.display = "none";
+            timeField.style.display = "none";
+
+            interval.value = "0";
+
+            help.textContent =
+                "Back up repeatedly using a configurable interval.";
+        }
+        else if (type === "2") {
+            intervalField.style.display = "none";
+            intervalInput.disabled = true;
+            intervalInput.required = false;
+            intervalInput.value = "0";
+
+            dayField.style.display = "none";
+            timeField.style.display = "";
+
+            help.textContent =
+                "Run the backup once per day at the selected time.";
+        }
+        else {
+            intervalField.style.display = "none";
+            intervalInput.disabled = true;
+            intervalInput.required = false;
+            intervalInput.value = "0";
+
+            dayField.style.display = "";
+            timeField.style.display = "";
+
+            help.textContent =
+                "Run the backup once per week on the selected day and time.";
+        }
+
+        interval.value =
+            timeToMinutes(timeInput.value);
+    }
+
+    function updateCreateScheduleTime() {
+        const hidden =
+            document.getElementById("createScheduleTimeMinutes");
+
+        const time =
+            document.getElementById("createScheduleTime");
+
+        hidden.value =
+            timeToMinutes(time.value);
+    }
+
+    function updateEditScheduleFields() {
+        const type =
+            document.getElementById("editScheduleType").value;
+
+        const intervalField =
+            document.getElementById("editIntervalField");
+
+        const intervalInput =
+            document.getElementById("editPlanInterval");
+
+        const dayField =
+            document.getElementById("editDayField");
+
+        const timeField =
+            document.getElementById("editTimeField");
+
+        const help =
+            document.getElementById("editScheduleHelp");
+
+        if (type === "1") {
+            intervalField.style.display = "";
+            intervalInput.disabled = false;
+            intervalInput.required = true;
+
+            dayField.style.display = "none";
+            timeField.style.display = "none";
+
+            help.textContent =
+                "Back up repeatedly using a configurable interval.";
+        }
+        else if (type === "2") {
+            intervalField.style.display = "none";
+            intervalInput.disabled = true;
+            intervalInput.required = false;
+            intervalInput.value = "0";
+
+            dayField.style.display = "none";
+            timeField.style.display = "";
+
+            help.textContent =
+                "Run the backup once per day at the selected time.";
+        }
+        else {
+            intervalField.style.display = "none";
+            intervalInput.disabled = true;
+            intervalInput.required = false;
+            intervalInput.value = "0";
+
+            dayField.style.display = "";
+            timeField.style.display = "";
+
+            help.textContent =
+                "Run the backup once per week on the selected day and time.";
+        }
+    }
+
+    function updateEditScheduleTime() {
+        const hidden =
+            document.getElementById("editScheduleTimeMinutes");
+
+        const time =
+            document.getElementById("editScheduleTime");
+
+        hidden.value =
+            timeToMinutes(time.value);
+    }
+
+    function showEditPlan(
+        id,
+        scheduleType,
+        intervalMinutes,
+        scheduleTimeMinutes,
+        scheduleDayOfWeek,
+        retentionDays) {
+
+        document.getElementById("editPlanId").value =
+            id;
+
+        document.getElementById("editScheduleType").value =
+            scheduleType;
+
+        document.getElementById("editPlanInterval").value =
+            intervalMinutes;
+
+        document.getElementById("editScheduleTimeMinutes").value =
+            scheduleTimeMinutes;
+
+        document.getElementById("editScheduleDay").value =
+            scheduleDayOfWeek;
+
+        document.getElementById("editScheduleTime").value =
+            minutesToTime(scheduleTimeMinutes);
+
+        document.getElementById("editPlanRetention").value =
+            retentionDays;
+
+        document.getElementById("editPlanDialog").style.display =
+            "flex";
+
+        updateEditScheduleFields();
+
+        document.getElementById("editScheduleType").focus();
+    }
+
+    function hideEditPlan() {
+        document.getElementById("editPlanDialog").style.display =
+            "none";
+    }
+
+    document.addEventListener(
+        "DOMContentLoaded",
+        function () {
+
+            const createTime =
+                document.getElementById("createScheduleTime");
+
+            if (createTime) {
+                createTime.addEventListener(
+                    "change",
+                    updateCreateScheduleTime);
+            }
+
+            const editTime =
+                document.getElementById("editScheduleTime");
+
+            if (editTime) {
+                editTime.addEventListener(
+                    "change",
+                    updateEditScheduleTime);
+            }
+
+            const createForm =
+                document.querySelector(
+                    'form[asp-page-handler="Create"]');
+
+            if (createForm) {
+                createForm.addEventListener(
+                    "submit",
+                    updateCreateScheduleTime);
+            }
+
+            const editForm =
+                document.querySelector(
+                    'form[asp-page-handler="Update"]');
+
+            if (editForm) {
+                editForm.addEventListener(
+                    "submit",
+                    updateEditScheduleTime);
+            }
+
+            updateCreateScheduleFields();
+        });
+</script>
+}

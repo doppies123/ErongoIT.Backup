@@ -1,0 +1,328 @@
+@page
+@model DevicesModel
+
+@{
+    ViewData["Title"] = "Devices";
+}
+
+<div class="page-header">
+    <div>
+        <div class="eyebrow">ERONGOIT BACKUP</div>
+        <h1>Devices</h1>
+        <p class="page-description">
+            Manage computers protected by the backup service.
+        </p>
+    </div>
+
+    <div class="api-status">
+        <span class="status-dot @(Model.Health?.Status == "Healthy" ? "online" : "offline")"></span>
+        <span>
+            API
+            <strong>
+                @(Model.Health?.Status ?? "Unavailable")
+            </strong>
+        </span>
+    </div>
+</div>
+
+@if (TempData["SuccessMessage"] is string successMessage)
+{
+    <div class="alert alert-success dashboard-alert">
+        @successMessage
+    </div>
+}
+
+@if (TempData["ErrorMessage"] is string errorMessage)
+{
+    <div class="alert alert-danger dashboard-alert">
+        @errorMessage
+    </div>
+}
+
+@if (!ViewData.ModelState.IsValid)
+{
+    <div class="alert alert-danger dashboard-alert">
+        <strong>Unable to complete the request.</strong>
+
+        <ul>
+        @foreach (var error in ViewData.ModelState.Values
+            .SelectMany(x => x.Errors))
+        {
+            <li>@error.ErrorMessage</li>
+        }
+        </ul>
+    </div>
+}
+
+<section class="panel customer-create-panel">
+    <div class="panel-header">
+        <div>
+            <h2>Add Device</h2>
+            <p>Register a computer with the backup server.</p>
+        </div>
+    </div>
+
+    @if (Model.Customers.Count == 0)
+    {
+        <div class="empty-state">
+            Create a customer before adding a device.
+        </div>
+    }
+    else
+    {
+        <form method="post"
+              asp-page-handler="Create"
+              class="customer-form">
+
+            <div class="customer-form-field">
+                <label asp-for="CreateDevice.CustomerId">
+                    Customer
+                </label>
+
+                <select asp-for="CreateDevice.CustomerId"
+                        class="form-control">
+                    <option value="">Select customer</option>
+
+                    @foreach (var customer in Model.Customers)
+                    {
+                        <option value="@customer.Id">
+                            @customer.Name
+                        </option>
+                    }
+                </select>
+            </div>
+
+            <div class="customer-form-field">
+                <label asp-for="CreateDevice.Name">
+                    Device Name
+                </label>
+
+                <input asp-for="CreateDevice.Name"
+                       class="form-control"
+                       placeholder="e.g. OFFICE-PC-01" />
+            </div>
+
+            <div class="customer-form-field">
+                <label asp-for="CreateDevice.Hostname">
+                    Hostname
+                </label>
+
+                <input asp-for="CreateDevice.Hostname"
+                       class="form-control"
+                       placeholder="Hostname" />
+            </div>
+
+            <div class="customer-form-field">
+                <label asp-for="CreateDevice.OperatingSystem">
+                    Operating System
+                </label>
+
+                <input asp-for="CreateDevice.OperatingSystem"
+                       class="form-control"
+                       placeholder="e.g. Windows 11" />
+            </div>
+
+            <div class="customer-form-action">
+                <button type="submit"
+                        class="btn btn-primary">
+                    Add Device
+                </button>
+            </div>
+        </form>
+    }
+</section>
+
+<section class="panel">
+    <div class="panel-header">
+        <div>
+            <h2>Registered Devices</h2>
+            <p>Agent connectivity and heartbeat status.</p>
+        </div>
+
+        <span class="badge badge-muted">
+            @Model.Devices.Count device@(Model.Devices.Count == 1 ? "" : "s")
+        </span>
+    </div>
+
+    @if (Model.Devices.Count == 0)
+    {
+        <div class="empty-state">
+            No devices found.
+        </div>
+    }
+    else
+    {
+        <div class="table-wrap">
+            <table class="customers-table">
+                <thead>
+                    <tr>
+                        <th>Device</th>
+                        <th>Customer</th>
+                        <th>Operating System</th>
+                        <th>Agent</th>
+                        <th>Last Seen</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                @foreach (var device in Model.Devices)
+                {
+                    var online =
+                        device.IsActive &&
+                        device.LastSeenAtUtc.HasValue &&
+                        DateTime.UtcNow -
+                        device.LastSeenAtUtc.Value <
+                        TimeSpan.FromMinutes(2);
+
+                    var customer = Model.Customers
+                        .FirstOrDefault(x =>
+                            x.Id == device.CustomerId);
+
+                    <tr>
+                        <td>
+                            <strong>@device.Name</strong>
+
+                            @if (!string.IsNullOrWhiteSpace(device.Hostname))
+                            {
+                                <small>@device.Hostname</small>
+                            }
+                        </td>
+
+                        <td>
+                            @(customer?.Name ?? "Unknown")
+                        </td>
+
+                        <td>
+                            @(device.OperatingSystem ?? "Unknown")
+                        </td>
+
+                        <td>
+                            @(device.AgentVersion ?? "Unknown")
+                        </td>
+
+                        <td>
+                            @(device.LastSeenAtUtc?
+                                .ToLocalTime()
+                                .ToString("yyyy-MM-dd HH:mm:ss")
+                                ?? "Never")
+                        </td>
+
+                        <td>
+                            <span class="badge @(online
+                                ? "badge-success"
+                                : "badge-muted")">
+                                @(online ? "Online" : "Offline")
+                            </span>
+                        </td>
+
+                        <td>
+                            <div class="customer-actions">
+
+                                <button type="button"
+                                        class="btn btn-sm btn-outline-primary"
+                                        onclick="showRenameDevice('@device.Id', '@device.Name.Replace("'", "\\'")')">
+                                    Rename
+                                </button>
+
+                                @if (device.IsActive)
+                                {
+                                    <form method="post"
+                                          asp-page-handler="Deactivate">
+
+                                        <input type="hidden"
+                                               name="deviceId"
+                                               value="@device.Id" />
+
+                                        <button type="submit"
+                                                class="btn btn-sm btn-outline-danger">
+                                            Deactivate
+                                        </button>
+                                    </form>
+                                }
+                                else
+                                {
+                                    <form method="post"
+                                          asp-page-handler="Activate">
+
+                                        <input type="hidden"
+                                               name="deviceId"
+                                               value="@device.Id" />
+
+                                        <button type="submit"
+                                                class="btn btn-sm btn-outline-success">
+                                            Activate
+                                        </button>
+                                    </form>
+                                }
+                            </div>
+                        </td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        </div>
+    }
+</section>
+
+<div id="renameDeviceDialog"
+     class="modal-backdrop-custom"
+     style="display:none;">
+
+    <div class="modal-card-custom">
+        <div class="panel-header">
+            <div>
+                <h2>Rename Device</h2>
+                <p>Change the device display name.</p>
+            </div>
+        </div>
+
+        <form method="post"
+              asp-page-handler="Rename">
+
+            <input type="hidden"
+                   id="renameDeviceId"
+                   name="RenameDevice.DeviceId" />
+
+            <div class="modal-body-custom">
+                <label for="renameDeviceName">
+                    Device Name
+                </label>
+
+                <input id="renameDeviceName"
+                       name="RenameDevice.Name"
+                       class="form-control"
+                       required />
+            </div>
+
+            <div class="modal-actions-custom">
+                <button type="button"
+                        class="btn btn-outline-secondary"
+                        onclick="hideRenameDevice()">
+                    Cancel
+                </button>
+
+                <button type="submit"
+                        class="btn btn-primary">
+                    Save
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+@section Scripts {
+<script>
+    function showRenameDevice(id, name) {
+        document.getElementById("renameDeviceId").value = id;
+        document.getElementById("renameDeviceName").value = name;
+        document.getElementById("renameDeviceDialog").style.display = "flex";
+        document.getElementById("renameDeviceName").focus();
+    }
+
+    function hideRenameDevice() {
+        document.getElementById("renameDeviceDialog").style.display = "none";
+    }
+</script>
+}

@@ -1,0 +1,6 @@
+@ErongoIT.Backup.Api_HostAddress = http://localhost:5230
+
+GET {{ErongoIT.Backup.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

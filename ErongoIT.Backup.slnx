@@ -1,0 +1,9 @@
+<Solution>
+  <Project Path="ErongoIT.Backup.Agent.Gui/ErongoIT.Backup.Agent.Gui.csproj" />
+  <Project Path="ErongoIT.Backup.Agent/ErongoIT.Backup.Agent.csproj" />
+  <Project Path="ErongoIT.Backup.Api/ErongoIT.Backup.Api.csproj" />
+  <Project Path="ErongoIT.Backup.Application/ErongoIT.Backup.Application.csproj" />
+  <Project Path="ErongoIT.Backup.Domain/ErongoIT.Backup.Domain.csproj" />
+  <Project Path="ErongoIT.Backup.Infrastructure/ErongoIT.Backup.Infrastructure.csproj" />
+  <Project Path="ErongoIT.Backup.Web/ErongoIT.Backup.Web.csproj" />
+</Solution>
