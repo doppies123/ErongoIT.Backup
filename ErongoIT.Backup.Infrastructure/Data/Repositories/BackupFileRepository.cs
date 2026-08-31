@@ -24,6 +24,31 @@ public sealed class BackupFileRepository : IBackupFileRepository
             .ToListAsync(cancellationToken);
     }
 
+    public async Task<IReadOnlyList<BackupFile>> GetByIdsAsync(
+        Guid backupJobId,
+        IReadOnlyCollection<Guid> ids,
+        CancellationToken cancellationToken = default)
+    {
+        if (ids.Count == 0)
+            return Array.Empty<BackupFile>();
+
+        var distinctIds = ids
+            .Where(x => x != Guid.Empty)
+            .Distinct()
+            .ToList();
+
+        if (distinctIds.Count == 0)
+            return Array.Empty<BackupFile>();
+
+        return await _db.BackupFiles
+            .AsNoTracking()
+            .Where(x =>
+                x.BackupJobId == backupJobId &&
+                distinctIds.Contains(x.Id))
+            .OrderBy(x => x.RelativePath)
+            .ToListAsync(cancellationToken);
+    }
+
     public Task<BackupFile?> GetByIdAsync(
         Guid id,
         CancellationToken cancellationToken = default)

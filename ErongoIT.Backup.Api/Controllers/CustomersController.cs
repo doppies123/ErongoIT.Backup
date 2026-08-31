@@ -1,10 +1,12 @@
 using ErongoIT.Backup.Application.Customers;
+using Microsoft.AspNetCore.Authorization;
 using ErongoIT.Backup.Domain.Entities;
 using Microsoft.AspNetCore.Mvc;
 
 namespace ErongoIT.Backup.Api.Controllers;
 
 [ApiController]
+[Authorize]
 [Route("api/customers")]
 public sealed class CustomersController : ControllerBase
 {

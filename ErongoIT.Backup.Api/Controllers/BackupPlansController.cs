@@ -1,4 +1,5 @@
 using ErongoIT.Backup.Application.BackupPlans;
+using Microsoft.AspNetCore.Authorization;
 using ErongoIT.Backup.Domain.Entities;
 using ErongoIT.Backup.Domain.Enums;
 using Microsoft.AspNetCore.Mvc;
@@ -6,6 +7,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace ErongoIT.Backup.Api.Controllers;
 
 [ApiController]
+[Authorize]
 [Route("api")]
 public sealed class BackupPlansController : ControllerBase
 {

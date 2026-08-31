@@ -5,7 +5,8 @@ namespace ErongoIT.Backup.Infrastructure.Data;
 
 public sealed class BackupDbContext : DbContext
 {
-    public BackupDbContext(DbContextOptions<BackupDbContext> options)
+    public BackupDbContext(
+        DbContextOptions<BackupDbContext> options)
         : base(options)
     {
     }
@@ -22,7 +23,10 @@ public sealed class BackupDbContext : DbContext
 
     public DbSet<BackupContent> BackupContents => Set<BackupContent>();
 
-    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    public DbSet<User> Users => Set<User>();
+
+    protected override void OnModelCreating(
+        ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
 

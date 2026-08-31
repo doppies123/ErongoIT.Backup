@@ -7,8 +7,6 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-    ports:
-      - "5433:5432"
     volumes:
       - erongoit_backup_postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -16,6 +14,43 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: ErongoIT.Backup.Api/Dockerfile
+    image: erongoit-backup-api:latest
+    container_name: erongoit-backup-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ConnectionStrings__BackupDatabase: "Host=postgres;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}"
+      BackupStorage__RootPath: "/app/storage"
+      Jwt__Key: "${JWT_KEY}"
+      Jwt__Issuer: "${JWT_ISSUER}"
+      Jwt__Audience: "${JWT_AUDIENCE}"
+      ASPNETCORE_ENVIRONMENT: "Production"
+      ASPNETCORE_URLS: "http://+:8080"
+    volumes:
+      - ./backup-storage:/app/storage
+
+  web:
+    build:
+      context: .
+      dockerfile: ErongoIT.Backup.Web/Dockerfile
+    image: erongoit-backup-web:latest
+    container_name: erongoit-backup-web
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      BackupApi__BaseUrl: "http://api:8080/"
+      ASPNETCORE_ENVIRONMENT: "Production"
+      ASPNETCORE_URLS: "http://+:8080"
+    ports:
+      - "5165:8080"
 
 volumes:
   erongoit_backup_postgres_data:

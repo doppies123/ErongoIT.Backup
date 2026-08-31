@@ -17,6 +17,9 @@ public partial class MainWindow : Window
     private BackupPlanDto? _plan;
     private IReadOnlyList<BackupJobDto> _jobs =
         Array.Empty<BackupJobDto>();
+    private IReadOnlyList<BackupFileDto> _restoreFiles =
+        Array.Empty<BackupFileDto>();
+
 
     private CancellationTokenSource? _backupCancellation;
     private bool _backupRunning;
@@ -839,12 +842,343 @@ public partial class MainWindow : Window
         ShowView(BackupView);
     }
 
-    private void Restore_Click(
+    private async void Restore_Click(
         object sender,
         RoutedEventArgs e)
     {
         ShowView(RestoreView);
+
+        RestoreStatusText.Text =
+            "Select a backup date.";
+
+        RestoreBackupButton.IsEnabled = false;
+
+        _restoreFiles =
+            Array.Empty<BackupFileDto>();
+
+        RestoreFilesGrid.ItemsSource = null;
+        RestoreJobComboBox.ItemsSource = null;
+
+        RestoreCalendar.SelectedDates.Clear();
+
+        var completedJobs =
+            _jobs
+                .Where(x =>
+                    x.Status.Equals(
+                        "Completed",
+                        StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(
+                    x => x.CompletedAtUtc ?? x.StartedAtUtc)
+                .ToList();
+
+        if (completedJobs.Count == 0)
+        {
+            RestoreCalendarDetails.Text =
+                "No completed backups are available.";
+
+            RestoreStatusText.Text =
+                "No completed backups are available.";
+
+            return;
+        }
+
+        var backupDates =
+            completedJobs
+                .Select(x =>
+                    (x.CompletedAtUtc ?? x.StartedAtUtc)
+                        .ToLocalTime()
+                        .Date)
+                .Distinct()
+                .OrderBy(x => x)
+                .ToList();
+
+
+        RestoreCalendar.DisplayDate =
+            backupDates[^1];
+
+        RestoreCalendarDetails.Text =
+            $"{backupDates.Count:N0} backup dates available. " +
+            "Select a date.";
+
+        RestoreStatusText.Text =
+            "Select a date on the calendar.";
     }
+
+    private void RestoreCalendar_DisplayDateChanged(
+        object sender,
+        CalendarDateChangedEventArgs e)
+    {
+        UpdateCalendarHighlights();
+    }
+
+    private void RestoreCalendar_SelectedDatesChanged(
+        object sender,
+        SelectionChangedEventArgs e)
+    {
+        if (RestoreCalendar.SelectedDate is not DateTime selectedDate)
+            return;
+
+        var selectedDateOnly =
+            selectedDate.Date;
+
+        var matchingJobs =
+            _jobs
+                .Where(x =>
+                    x.Status.Equals(
+                        "Completed",
+                        StringComparison.OrdinalIgnoreCase))
+                .Where(x =>
+                    (x.CompletedAtUtc ?? x.StartedAtUtc)
+                        .ToLocalTime()
+                        .Date == selectedDateOnly)
+                .OrderByDescending(
+                    x => x.CompletedAtUtc ?? x.StartedAtUtc)
+                .ToList();
+
+        RestoreJobComboBox.ItemsSource =
+            matchingJobs
+                .Select(x => new RestoreJobRow(x))
+                .ToList();
+
+        RestoreFilesGrid.ItemsSource = null;
+
+        _restoreFiles =
+            Array.Empty<BackupFileDto>();
+
+        RestoreBackupButton.IsEnabled = false;
+
+        if (matchingJobs.Count == 0)
+        {
+            RestoreCalendarDetails.Text =
+                $"{selectedDateOnly:dd MMM yyyy}: no completed backup.";
+
+            RestoreStatusText.Text =
+                "No completed backup exists for this date.";
+
+            return;
+        }
+
+        RestoreCalendarDetails.Text =
+            matchingJobs.Count == 1
+                ? $"{selectedDateOnly:dd MMM yyyy}: 1 completed backup."
+                : $"{selectedDateOnly:dd MMM yyyy}: {matchingJobs.Count:N0} completed backups.";
+
+        RestoreStatusText.Text =
+            "Select a backup.";
+
+        RestoreJobComboBox.SelectedIndex = 0;
+    }
+
+    private void UpdateCalendarHighlights()
+    {
+        // WPF's standard Calendar control does not expose
+        // per-date styling through a simple property.
+        // The available backup dates are therefore handled
+        // through the date selection logic.
+    }
+
+    private async void RestoreJobComboBox_SelectionChanged(
+        object sender,
+        SelectionChangedEventArgs e)
+    {
+        if (RestoreJobComboBox.SelectedItem
+            is not RestoreJobRow row)
+            return;
+
+        try
+        {
+            RestoreStatusText.Text =
+                "Loading files...";
+
+            _restoreFiles =
+                await _api.GetBackupFilesAsync(
+                    row.Job.Id);
+
+            RestoreFilesGrid.ItemsSource =
+                _restoreFiles
+                    .Select(x => new RestoreFileRow(x))
+                    .ToList();
+
+            RestoreCalendarDetails.Text =
+                $"{_restoreFiles.Count:N0} files in this backup.";
+
+            RestoreBackupButton.IsEnabled =
+                _restoreFiles.Count > 0;
+
+            RestoreStatusText.Text =
+                _restoreFiles.Count > 0
+                    ? "Ready to restore."
+                    : "This backup contains no files.";
+        }
+        catch (Exception ex)
+        {
+            _restoreFiles =
+                Array.Empty<BackupFileDto>();
+
+            RestoreFilesGrid.ItemsSource = null;
+            RestoreBackupButton.IsEnabled = false;
+
+            RestoreStatusText.Text =
+                $"Unable to load files: {ex.Message}";
+        }
+    }
+
+    private void BrowseRestoreDestination_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        var dialog =
+            new Microsoft.Win32.OpenFolderDialog
+            {
+                Title = "Select restore destination."
+            };
+
+        if (dialog.ShowDialog() == true)
+        {
+            RestoreDestinationText.Text =
+                dialog.FolderName;
+        }
+    }
+
+    private async void RestoreBackup_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        if (RestoreJobComboBox.SelectedItem
+            is not RestoreJobRow row)
+            return;
+
+        var destination =
+            RestoreDestinationText.Text.Trim();
+
+        if (string.IsNullOrWhiteSpace(destination))
+        {
+            MessageBox.Show(
+                this,
+                "Select a restore destination.",
+                "Restore",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+
+            return;
+        }
+
+        if (_restoreFiles.Count == 0)
+        {
+            MessageBox.Show(
+                this,
+                "There are no files available in the selected backup.",
+                "Restore",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+
+            return;
+        }
+
+        var answer =
+            MessageBox.Show(
+                this,
+                $"Restore {_restoreFiles.Count:N0} files to:" +
+                $"{Environment.NewLine}{Environment.NewLine}" +
+                destination +
+                $"{Environment.NewLine}{Environment.NewLine}" +
+                "Existing files may be overwritten.",
+                "Confirm Restore",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question);
+
+        if (answer != MessageBoxResult.Yes)
+            return;
+
+        try
+        {
+            RestoreBackupButton.IsEnabled = false;
+            RestoreStatusText.Text =
+                "Restoring files...";
+
+            var fileIds =
+                _restoreFiles
+                    .Select(x => x.Id)
+                    .ToList();
+
+            var result =
+                await _api.RestoreBackupAsync(
+                    row.Job.Id,
+                    fileIds,
+                    destination);
+
+            RestoreStatusText.Text =
+                $"Restore complete. {result.FilesRestored:N0} files restored. " +
+                $"{FormatBytes(result.BytesRestored)}.";
+
+            MessageBox.Show(
+                this,
+                $"Restore completed successfully." +
+                $"{Environment.NewLine}{Environment.NewLine}" +
+                $"Files restored: {result.FilesRestored:N0}" +
+                $"{Environment.NewLine}" +
+                $"Data restored: {FormatBytes(result.BytesRestored)}",
+                "Restore Complete",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            RestoreStatusText.Text =
+                "Restore failed.";
+
+            MessageBox.Show(
+                this,
+                ex.Message,
+                "Restore Failed",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
+        finally
+        {
+            RestoreBackupButton.IsEnabled =
+                _restoreFiles.Count > 0;
+        }
+    }
+
+    private sealed class RestoreJobRow
+    {
+        public BackupJobDto Job { get; }
+
+        public string Display { get; }
+
+        public RestoreJobRow(BackupJobDto job)
+        {
+            Job = job;
+
+            var date =
+                (job.CompletedAtUtc ?? job.StartedAtUtc)
+                    .ToLocalTime();
+
+            Display =
+                $"{date:HH:mm:ss} - {FormatBytes(job.BytesUploaded)}";
+        }
+
+        public override string ToString()
+        {
+            return Display;
+        }
+    }
+
+    private sealed class RestoreFileRow
+    {
+        public string RelativePath { get; }
+
+        public string SizeDisplay =>
+            "Available";
+
+        public RestoreFileRow(BackupFileDto file)
+        {
+            RelativePath =
+                file.RelativePath;
+        }
+    }
+
 
     private void History_Click(
         object sender,
@@ -860,6 +1194,7 @@ public partial class MainWindow : Window
 
         ShowView(HistoryView);
     }
+
 
     private void Settings_Click(
         object sender,

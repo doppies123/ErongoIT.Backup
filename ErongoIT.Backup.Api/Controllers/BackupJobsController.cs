@@ -1,4 +1,5 @@
 using ErongoIT.Backup.Application.BackupJobs;
+using Microsoft.AspNetCore.Authorization;
 using ErongoIT.Backup.Domain.Entities;
 using ErongoIT.Backup.Domain.Enums;
 using Microsoft.AspNetCore.Mvc;
@@ -6,6 +7,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace ErongoIT.Backup.Api.Controllers;
 
 [ApiController]
+[Authorize]
 [Route("api")]
 public sealed class BackupJobsController : ControllerBase
 {
@@ -153,6 +155,41 @@ public sealed class BackupJobsController : ControllerBase
             });
         }
     }
+
+    [HttpPost("backup-jobs/{id:guid}/progress")]
+    public async Task<IActionResult> UpdateProgress(
+        Guid id,
+        [FromBody] UpdateBackupJobProgressRequest request,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await _service.UpdateProgressAsync(
+                id,
+                request.BytesSelected,
+                request.BytesUploaded,
+                cancellationToken);
+
+            return result
+                ? NoContent()
+                : NotFound();
+        }
+        catch (ArgumentOutOfRangeException ex)
+        {
+            return BadRequest(new
+            {
+                error = ex.Message
+            });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new
+            {
+                error = ex.Message
+            });
+        }
+    }
+
 
     [HttpPost("backup-jobs/{id:guid}/complete")]
     public async Task<IActionResult> Complete(
@@ -313,6 +350,11 @@ public sealed record CreateBackupJobRequest(
     Guid DeviceId,
     Guid BackupPlanId,
     BackupType Type);
+
+public sealed record UpdateBackupJobProgressRequest(
+    long BytesSelected,
+    long BytesUploaded);
+
 
 public sealed record CompleteBackupJobRequest(
     long BytesSelected,

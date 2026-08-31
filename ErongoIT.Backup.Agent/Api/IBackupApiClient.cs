@@ -30,6 +30,12 @@ public interface IBackupApiClient
         Guid backupJobId,
         CancellationToken cancellationToken = default);
 
+    Task UpdateProgressAsync(
+        Guid backupJobId,
+        long bytesSelected,
+        long bytesUploaded,
+        CancellationToken cancellationToken = default);
+
     Task UploadFileAsync(
         Guid backupJobId,
         Guid customerId,

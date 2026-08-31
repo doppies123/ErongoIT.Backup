@@ -168,7 +168,7 @@ public sealed class BackupApiClient : IBackupApiClient
             fileName);
 
         var url =
-            $"api/backup-jobs/{backupJobId}/files" +
+            $"api/backup-snapshots/{backupJobId}/files" +
             $"?customerId={Uri.EscapeDataString(customerId.ToString())}" +
             $"&deviceId={Uri.EscapeDataString(deviceId.ToString())}" +
             $"&relativePath={Uri.EscapeDataString(relativePath)}";
@@ -182,6 +182,28 @@ public sealed class BackupApiClient : IBackupApiClient
             response,
             cancellationToken);
     }
+
+    public async Task UpdateProgressAsync(
+        Guid backupJobId,
+        long bytesSelected,
+        long bytesUploaded,
+        CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync(
+            $"api/backup-jobs/{backupJobId}/progress",
+            new
+            {
+                bytesSelected,
+                bytesUploaded
+            },
+            JsonOptions,
+            cancellationToken);
+
+        await EnsureSuccessAsync(
+            response,
+            cancellationToken);
+    }
+
 
     public async Task CompleteBackupJobAsync(
         Guid backupJobId,
@@ -256,8 +278,13 @@ public sealed class BackupApiClient : IBackupApiClient
         var body = await response.Content.ReadAsStringAsync(
             cancellationToken);
 
+        var requestUrl =
+            response.RequestMessage?.RequestUri?.ToString()
+            ?? "<unknown URL>";
+
         throw new HttpRequestException(
-            $"Backup API request failed with HTTP {(int)response.StatusCode}: {body}");
+            $"Backup API request failed with HTTP {(int)response.StatusCode} " +
+            $"({response.StatusCode}) at {requestUrl}: {body}");
     }
 
     private sealed record RecoverStaleJobsResponse(

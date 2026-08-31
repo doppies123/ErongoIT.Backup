@@ -167,6 +167,29 @@ public sealed class BackupJobService : IBackupJobService
         return true;
     }
 
+    public async Task<bool> UpdateProgressAsync(
+        Guid id,
+        long bytesSelected,
+        long bytesUploaded,
+        CancellationToken cancellationToken = default)
+    {
+        var job = await _jobs.GetByIdAsync(
+            id,
+            cancellationToken);
+
+        if (job is null)
+            return false;
+
+        job.UpdateProgress(
+            bytesSelected,
+            bytesUploaded);
+
+        await _jobs.SaveChangesAsync(
+            cancellationToken);
+
+        return true;
+    }
+
     public async Task<bool> CompleteAsync(
         Guid id,
         long bytesSelected,

@@ -30,6 +30,12 @@ public interface IBackupJobService
         Guid id,
         CancellationToken cancellationToken = default);
 
+    Task<bool> UpdateProgressAsync(
+        Guid id,
+        long bytesSelected,
+        long bytesUploaded,
+        CancellationToken cancellationToken = default);
+
     Task<bool> CompleteAsync(
         Guid id,
         long bytesSelected,

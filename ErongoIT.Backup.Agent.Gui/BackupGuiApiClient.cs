@@ -1,3 +1,4 @@
+using System.IO;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
@@ -83,6 +84,80 @@ public sealed class BackupGuiApiClient
             ?? Array.Empty<BackupJobDto>();
     }
 
+    public async Task<IReadOnlyList<BackupFileDto>> GetBackupFilesAsync(
+        Guid backupJobId,
+        CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.GetAsync(
+            $"api/backup-snapshots/{backupJobId}/files",
+            cancellationToken);
+
+        await EnsureSuccessAsync(
+            response,
+            cancellationToken);
+
+        return await response.Content.ReadFromJsonAsync<
+            IReadOnlyList<BackupFileDto>>(
+                JsonOptions,
+                cancellationToken)
+            ?? Array.Empty<BackupFileDto>();
+    }
+
+    public async Task<BackupRestoreResultDto> RestoreBackupAsync(
+        Guid backupJobId,
+        IReadOnlyCollection<Guid> backupFileIds,
+        string destinationPath,
+        CancellationToken cancellationToken = default)
+    {
+        if (backupJobId == Guid.Empty)
+            throw new ArgumentException(
+                "Backup job ID is required.",
+                nameof(backupJobId));
+
+        if (backupFileIds is null)
+            throw new ArgumentNullException(
+                nameof(backupFileIds));
+
+        if (string.IsNullOrWhiteSpace(destinationPath))
+            throw new ArgumentException(
+                "Destination path is required.",
+                nameof(destinationPath));
+
+        var selectedIds =
+            backupFileIds
+                .Where(x => x != Guid.Empty)
+                .Distinct()
+                .ToList();
+
+        if (selectedIds.Count == 0)
+            throw new ArgumentException(
+                "At least one backup file must be selected.",
+                nameof(backupFileIds));
+
+        var response =
+            await _httpClient.PostAsJsonAsync(
+                $"api/backup-jobs/{backupJobId}/restore",
+                new
+                {
+                    BackupFileIds = selectedIds,
+                    DestinationPath = destinationPath
+                },
+                JsonOptions,
+                cancellationToken);
+
+        await EnsureSuccessAsync(
+            response,
+            cancellationToken);
+
+        return await response.Content.ReadFromJsonAsync<
+                   BackupRestoreResultDto>(
+                       JsonOptions,
+                       cancellationToken)
+               ?? throw new InvalidOperationException(
+                   "Backup API returned an empty restore result.");
+    }
+
+
     public async Task<BackupJobDto> CreateBackupJobAsync(
         Guid customerId,
         Guid deviceId,
@@ -151,7 +226,7 @@ public sealed class BackupGuiApiClient
             fileName);
 
         var url =
-            $"api/backup-jobs/{backupJobId}/files" +
+            $"api/backup-snapshots/{backupJobId}/files" +
             $"?customerId={Uri.EscapeDataString(customerId.ToString())}" +
             $"&deviceId={Uri.EscapeDataString(deviceId.ToString())}" +
             $"&relativePath={Uri.EscapeDataString(relativePath)}";
@@ -256,3 +331,16 @@ public sealed record BackupJobDto(
     long BytesUploaded,
     string Status,
     string? ErrorMessage);
+
+public sealed record BackupFileDto(
+    Guid Id,
+    Guid BackupJobId,
+    Guid BackupContentId,
+    string RelativePath,
+    DateTime CreatedAtUtc);
+
+public sealed record BackupRestoreResultDto(
+    Guid BackupJobId,
+    string DestinationPath,
+    int FilesRestored,
+    long BytesRestored);

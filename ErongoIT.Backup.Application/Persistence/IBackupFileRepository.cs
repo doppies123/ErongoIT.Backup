@@ -8,6 +8,11 @@ public interface IBackupFileRepository
         Guid backupJobId,
         CancellationToken cancellationToken = default);
 
+    Task<IReadOnlyList<BackupFile>> GetByIdsAsync(
+        Guid backupJobId,
+        IReadOnlyCollection<Guid> ids,
+        CancellationToken cancellationToken = default);
+
     Task<BackupFile?> GetByIdAsync(
         Guid id,
         CancellationToken cancellationToken = default);

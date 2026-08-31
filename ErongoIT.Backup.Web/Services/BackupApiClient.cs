@@ -1,19 +1,44 @@
+using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.AspNetCore.Authentication;
 
 namespace ErongoIT.Backup.Web.Services;
 
 public sealed class BackupApiClient
 {
     private readonly HttpClient _httpClient;
+    private readonly IHttpContextAccessor _httpContextAccessor;
     private readonly ILogger<BackupApiClient> _logger;
 
     public BackupApiClient(
         HttpClient httpClient,
+        IHttpContextAccessor httpContextAccessor,
         ILogger<BackupApiClient> logger)
     {
         _httpClient = httpClient;
+        _httpContextAccessor = httpContextAccessor;
         _logger = logger;
+    }
+
+    public async Task<LoginResponse?> LoginAsync(
+        string username,
+        string password,
+        CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync(
+            "api/auth/login",
+            new LoginRequest(username, password),
+            cancellationToken);
+
+        if (response.StatusCode == HttpStatusCode.Unauthorized)
+            return null;
+
+        await EnsureSuccessAsync(response);
+
+        return await response.Content.ReadFromJsonAsync<LoginResponse>(
+            cancellationToken);
     }
 
     public async Task<ApiHealth?> GetHealthAsync(
@@ -21,8 +46,20 @@ public sealed class BackupApiClient
     {
         try
         {
-            return await _httpClient.GetFromJsonAsync<ApiHealth>(
-                "api/health",
+            using var request =
+                await CreateRequestAsync(
+                    HttpMethod.Get,
+                    "api/health");
+
+            using var response =
+                await _httpClient.SendAsync(
+                    request,
+                    cancellationToken);
+
+            if (!response.IsSuccessStatusCode)
+                return null;
+
+            return await response.Content.ReadFromJsonAsync<ApiHealth>(
                 cancellationToken);
         }
         catch (Exception ex)
@@ -38,9 +75,20 @@ public sealed class BackupApiClient
     public async Task<IReadOnlyList<Customer>> GetCustomersAsync(
         CancellationToken cancellationToken = default)
     {
-        return await _httpClient.GetFromJsonAsync<
+        using var request =
+            await CreateRequestAsync(
+                HttpMethod.Get,
+                "api/customers");
+
+        using var response =
+            await _httpClient.SendAsync(
+                request,
+                cancellationToken);
+
+        await EnsureSuccessAsync(response);
+
+        return await response.Content.ReadFromJsonAsync<
             IReadOnlyList<Customer>>(
-                "api/customers",
                 cancellationToken)
             ?? Array.Empty<Customer>();
     }
@@ -50,12 +98,18 @@ public sealed class BackupApiClient
         string? contactEmail,
         CancellationToken cancellationToken = default)
     {
-        var response = await _httpClient.PostAsJsonAsync(
-            "api/customers",
-            new CreateCustomerApiRequest(
-                name,
-                contactEmail),
-            cancellationToken);
+        using var request =
+            await CreateRequestAsync(
+                HttpMethod.Post,
+                "api/customers",
+                new CreateCustomerApiRequest(
+                    name,
+                    contactEmail));
+
+        using var response =
+            await _httpClient.SendAsync(
+                request,
+                cancellationToken);
 
         await EnsureSuccessAsync(response);
 
@@ -73,10 +127,14 @@ public sealed class BackupApiClient
         string? contactEmail,
         CancellationToken cancellationToken = default)
     {
-        var response = await _httpClient.PutAsJsonAsync(
-            $"api/customers/{customerId}/contact-email",
-            new UpdateContactEmailApiRequest(contactEmail),
-            cancellationToken);
+        using var request =
+            await CreateRequestAsync(
+                HttpMethod.Put,
+                $"api/customers/{customerId}/contact-email",
+                new UpdateContactEmailApiRequest(contactEmail));
+
+        using var response =
+            await _httpClient.SendAsync(request, cancellationToken);
 
         await EnsureSuccessAsync(response);
     }
@@ -85,10 +143,13 @@ public sealed class BackupApiClient
         Guid customerId,
         CancellationToken cancellationToken = default)
     {
-        var response = await _httpClient.PostAsync(
-            $"api/customers/{customerId}/activate",
-            content: null,
-            cancellationToken);
+        using var request =
+            await CreateRequestAsync(
+                HttpMethod.Post,
+                $"api/customers/{customerId}/activate");
+
+        using var response =
+            await _httpClient.SendAsync(request, cancellationToken);
 
         await EnsureSuccessAsync(response);
     }
@@ -97,10 +158,13 @@ public sealed class BackupApiClient
         Guid customerId,
         CancellationToken cancellationToken = default)
     {
-        var response = await _httpClient.PostAsync(
-            $"api/customers/{customerId}/deactivate",
-            content: null,
-            cancellationToken);
+        using var request =
+            await CreateRequestAsync(
+                HttpMethod.Post,
+                $"api/customers/{customerId}/deactivate");
+
+        using var response =
+            await _httpClient.SendAsync(request, cancellationToken);
 
         await EnsureSuccessAsync(response);
     }
@@ -109,10 +173,18 @@ public sealed class BackupApiClient
         Guid customerId,
         CancellationToken cancellationToken = default)
     {
-        return await _httpClient.GetFromJsonAsync<
-            IReadOnlyList<Device>>(
-                $"api/customers/{customerId}/devices",
-                cancellationToken)
+        using var request =
+            await CreateRequestAsync(
+                HttpMethod.Get,
+                $"api/customers/{customerId}/devices");
+
+        using var response =
+            await _httpClient.SendAsync(request, cancellationToken);
+
+        await EnsureSuccessAsync(response);
+
+        return await response.Content.ReadFromJsonAsync<
+            IReadOnlyList<Device>>(cancellationToken)
             ?? Array.Empty<Device>();
     }
 
@@ -123,13 +195,17 @@ public sealed class BackupApiClient
         string? operatingSystem,
         CancellationToken cancellationToken = default)
     {
-        var response = await _httpClient.PostAsJsonAsync(
-            $"api/customers/{customerId}/devices",
-            new CreateDeviceApiRequest(
-                name,
-                hostname,
-                operatingSystem),
-            cancellationToken);
+        using var request =
+            await CreateRequestAsync(
+                HttpMethod.Post,
+                $"api/customers/{customerId}/devices",
+                new CreateDeviceApiRequest(
+                    name,
+                    hostname,
+                    operatingSystem));
+
+        using var response =
+            await _httpClient.SendAsync(request, cancellationToken);
 
         await EnsureSuccessAsync(response);
 
@@ -147,10 +223,14 @@ public sealed class BackupApiClient
         string name,
         CancellationToken cancellationToken = default)
     {
-        var response = await _httpClient.PutAsJsonAsync(
-            $"api/devices/{deviceId}/name",
-            new RenameDeviceApiRequest(name),
-            cancellationToken);
+        using var request =
+            await CreateRequestAsync(
+                HttpMethod.Put,
+                $"api/devices/{deviceId}/name",
+                new RenameDeviceApiRequest(name));
+
+        using var response =
+            await _httpClient.SendAsync(request, cancellationToken);
 
         await EnsureSuccessAsync(response);
     }
@@ -160,10 +240,14 @@ public sealed class BackupApiClient
         string? agentVersion,
         CancellationToken cancellationToken = default)
     {
-        var response = await _httpClient.PostAsJsonAsync(
-            $"api/devices/{deviceId}/heartbeat",
-            new HeartbeatApiRequest(agentVersion),
-            cancellationToken);
+        using var request =
+            await CreateRequestAsync(
+                HttpMethod.Post,
+                $"api/devices/{deviceId}/heartbeat",
+                new HeartbeatApiRequest(agentVersion));
+
+        using var response =
+            await _httpClient.SendAsync(request, cancellationToken);
 
         await EnsureSuccessAsync(response);
     }
@@ -172,10 +256,13 @@ public sealed class BackupApiClient
         Guid deviceId,
         CancellationToken cancellationToken = default)
     {
-        var response = await _httpClient.PostAsync(
-            $"api/devices/{deviceId}/activate",
-            content: null,
-            cancellationToken);
+        using var request =
+            await CreateRequestAsync(
+                HttpMethod.Post,
+                $"api/devices/{deviceId}/activate");
+
+        using var response =
+            await _httpClient.SendAsync(request, cancellationToken);
 
         await EnsureSuccessAsync(response);
     }
@@ -184,10 +271,13 @@ public sealed class BackupApiClient
         Guid deviceId,
         CancellationToken cancellationToken = default)
     {
-        var response = await _httpClient.PostAsync(
-            $"api/devices/{deviceId}/deactivate",
-            content: null,
-            cancellationToken);
+        using var request =
+            await CreateRequestAsync(
+                HttpMethod.Post,
+                $"api/devices/{deviceId}/deactivate");
+
+        using var response =
+            await _httpClient.SendAsync(request, cancellationToken);
 
         await EnsureSuccessAsync(response);
     }
@@ -196,10 +286,18 @@ public sealed class BackupApiClient
         Guid customerId,
         CancellationToken cancellationToken = default)
     {
-        return await _httpClient.GetFromJsonAsync<
-            IReadOnlyList<BackupPlan>>(
-                $"api/customers/{customerId}/backup-plans",
-                cancellationToken)
+        using var request =
+            await CreateRequestAsync(
+                HttpMethod.Get,
+                $"api/customers/{customerId}/backup-plans");
+
+        using var response =
+            await _httpClient.SendAsync(request, cancellationToken);
+
+        await EnsureSuccessAsync(response);
+
+        return await response.Content.ReadFromJsonAsync<
+            IReadOnlyList<BackupPlan>>(cancellationToken)
             ?? Array.Empty<BackupPlan>();
     }
 
@@ -213,16 +311,20 @@ public sealed class BackupApiClient
         int retentionDays,
         CancellationToken cancellationToken = default)
     {
-        var response = await _httpClient.PostAsJsonAsync(
-            $"api/customers/{customerId}/backup-plans",
-            new CreateBackupPlanApiRequest(
-                name,
-                scheduleType,
-                intervalMinutes,
-                scheduleTimeMinutes,
-                scheduleDayOfWeek,
-                retentionDays),
-            cancellationToken);
+        using var request =
+            await CreateRequestAsync(
+                HttpMethod.Post,
+                $"api/customers/{customerId}/backup-plans",
+                new CreateBackupPlanApiRequest(
+                    name,
+                    scheduleType,
+                    intervalMinutes,
+                    scheduleTimeMinutes,
+                    scheduleDayOfWeek,
+                    retentionDays));
+
+        using var response =
+            await _httpClient.SendAsync(request, cancellationToken);
 
         await EnsureSuccessAsync(response);
 
@@ -244,15 +346,19 @@ public sealed class BackupApiClient
         int retentionDays,
         CancellationToken cancellationToken = default)
     {
-        var response = await _httpClient.PutAsJsonAsync(
-            $"api/backup-plans/{backupPlanId}/schedule",
-            new UpdateBackupPlanScheduleApiRequest(
-                scheduleType,
-                intervalMinutes,
-                scheduleTimeMinutes,
-                scheduleDayOfWeek,
-                retentionDays),
-            cancellationToken);
+        using var request =
+            await CreateRequestAsync(
+                HttpMethod.Put,
+                $"api/backup-plans/{backupPlanId}/schedule",
+                new UpdateBackupPlanScheduleApiRequest(
+                    scheduleType,
+                    intervalMinutes,
+                    scheduleTimeMinutes,
+                    scheduleDayOfWeek,
+                    retentionDays));
+
+        using var response =
+            await _httpClient.SendAsync(request, cancellationToken);
 
         await EnsureSuccessAsync(response);
     }
@@ -261,10 +367,13 @@ public sealed class BackupApiClient
         Guid backupPlanId,
         CancellationToken cancellationToken = default)
     {
-        var response = await _httpClient.PostAsync(
-            $"api/backup-plans/{backupPlanId}/enable",
-            content: null,
-            cancellationToken);
+        using var request =
+            await CreateRequestAsync(
+                HttpMethod.Post,
+                $"api/backup-plans/{backupPlanId}/enable");
+
+        using var response =
+            await _httpClient.SendAsync(request, cancellationToken);
 
         await EnsureSuccessAsync(response);
     }
@@ -273,10 +382,13 @@ public sealed class BackupApiClient
         Guid backupPlanId,
         CancellationToken cancellationToken = default)
     {
-        var response = await _httpClient.PostAsync(
-            $"api/backup-plans/{backupPlanId}/disable",
-            content: null,
-            cancellationToken);
+        using var request =
+            await CreateRequestAsync(
+                HttpMethod.Post,
+                $"api/backup-plans/{backupPlanId}/disable");
+
+        using var response =
+            await _httpClient.SendAsync(request, cancellationToken);
 
         await EnsureSuccessAsync(response);
     }
@@ -285,10 +397,18 @@ public sealed class BackupApiClient
         Guid deviceId,
         CancellationToken cancellationToken = default)
     {
-        return await _httpClient.GetFromJsonAsync<
-            IReadOnlyList<BackupJob>>(
-                $"api/devices/{deviceId}/backup-jobs",
-                cancellationToken)
+        using var request =
+            await CreateRequestAsync(
+                HttpMethod.Get,
+                $"api/devices/{deviceId}/backup-jobs");
+
+        using var response =
+            await _httpClient.SendAsync(request, cancellationToken);
+
+        await EnsureSuccessAsync(response);
+
+        return await response.Content.ReadFromJsonAsync<
+            IReadOnlyList<BackupJob>>(cancellationToken)
             ?? Array.Empty<BackupJob>();
     }
 
@@ -299,39 +419,23 @@ public sealed class BackupApiClient
         int type,
         CancellationToken cancellationToken = default)
     {
-        Console.WriteLine("========== WEB -> API CREATE JOB ==========");
-        Console.WriteLine($"POST: api/customers/{customerId}/backup-jobs");
-        Console.WriteLine($"DeviceId: {deviceId}");
-        Console.WriteLine($"BackupPlanId: {backupPlanId}");
-        Console.WriteLine($"Type: {type}");
+        using var request =
+            await CreateRequestAsync(
+                HttpMethod.Post,
+                $"api/customers/{customerId}/backup-jobs",
+                new CreateBackupJobApiRequest(
+                    deviceId,
+                    backupPlanId,
+                    type));
 
-        var response = await _httpClient.PostAsJsonAsync(
-            $"api/customers/{customerId}/backup-jobs",
-            new CreateBackupJobApiRequest(
-                deviceId,
-                backupPlanId,
-                type),
-            cancellationToken);
+        using var response =
+            await _httpClient.SendAsync(request, cancellationToken);
 
-        var responseBody = await response.Content.ReadAsStringAsync(
-            cancellationToken);
-
-        Console.WriteLine($"API STATUS: {(int)response.StatusCode} {response.StatusCode}");
-        Console.WriteLine($"API RESPONSE: {responseBody}");
-
-        if (!response.IsSuccessStatusCode)
-        {
-            throw new InvalidOperationException(
-                $"Backup API returned HTTP {(int)response.StatusCode}: {responseBody}");
-        }
+        await EnsureSuccessAsync(response);
 
         var job =
-            System.Text.Json.JsonSerializer.Deserialize<BackupJob>(
-                responseBody,
-                new System.Text.Json.JsonSerializerOptions
-                {
-                    PropertyNameCaseInsensitive = true
-                });
+            await response.Content.ReadFromJsonAsync<BackupJob>(
+                cancellationToken);
 
         return job
             ?? throw new InvalidOperationException(
@@ -342,10 +446,13 @@ public sealed class BackupApiClient
         Guid backupJobId,
         CancellationToken cancellationToken = default)
     {
-        var response = await _httpClient.PostAsync(
-            $"api/backup-jobs/{backupJobId}/start",
-            content: null,
-            cancellationToken);
+        using var request =
+            await CreateRequestAsync(
+                HttpMethod.Post,
+                $"api/backup-jobs/{backupJobId}/start");
+
+        using var response =
+            await _httpClient.SendAsync(request, cancellationToken);
 
         await EnsureSuccessAsync(response);
     }
@@ -356,12 +463,16 @@ public sealed class BackupApiClient
         long bytesUploaded,
         CancellationToken cancellationToken = default)
     {
-        var response = await _httpClient.PostAsJsonAsync(
-            $"api/backup-jobs/{backupJobId}/complete",
-            new CompleteBackupJobApiRequest(
-                bytesSelected,
-                bytesUploaded),
-            cancellationToken);
+        using var request =
+            await CreateRequestAsync(
+                HttpMethod.Post,
+                $"api/backup-jobs/{backupJobId}/complete",
+                new CompleteBackupJobApiRequest(
+                    bytesSelected,
+                    bytesUploaded));
+
+        using var response =
+            await _httpClient.SendAsync(request, cancellationToken);
 
         await EnsureSuccessAsync(response);
     }
@@ -371,10 +482,14 @@ public sealed class BackupApiClient
         string errorMessage,
         CancellationToken cancellationToken = default)
     {
-        var response = await _httpClient.PostAsJsonAsync(
-            $"api/backup-jobs/{backupJobId}/fail",
-            new FailBackupJobApiRequest(errorMessage),
-            cancellationToken);
+        using var request =
+            await CreateRequestAsync(
+                HttpMethod.Post,
+                $"api/backup-jobs/{backupJobId}/fail",
+                new FailBackupJobApiRequest(errorMessage));
+
+        using var response =
+            await _httpClient.SendAsync(request, cancellationToken);
 
         await EnsureSuccessAsync(response);
     }
@@ -383,10 +498,13 @@ public sealed class BackupApiClient
         Guid backupJobId,
         CancellationToken cancellationToken = default)
     {
-        var response = await _httpClient.PostAsync(
-            $"api/backup-jobs/{backupJobId}/cancel",
-            content: null,
-            cancellationToken);
+        using var request =
+            await CreateRequestAsync(
+                HttpMethod.Post,
+                $"api/backup-jobs/{backupJobId}/cancel");
+
+        using var response =
+            await _httpClient.SendAsync(request, cancellationToken);
 
         await EnsureSuccessAsync(response);
     }
@@ -395,32 +513,94 @@ public sealed class BackupApiClient
         Guid deviceId,
         CancellationToken cancellationToken = default)
     {
-        var response = await _httpClient.PostAsync(
-            $"api/devices/{deviceId}/backup-jobs/clear-history",
-            content: null,
-            cancellationToken);
+        using var request =
+            await CreateRequestAsync(
+                HttpMethod.Post,
+                $"api/devices/{deviceId}/backup-jobs/clear-history");
+
+        using var response =
+            await _httpClient.SendAsync(request, cancellationToken);
 
         await EnsureSuccessAsync(response);
     }
-
 
     public async Task<int> RecoverStaleBackupJobsAsync(
         Guid deviceId,
         int timeoutMinutes = 30,
         CancellationToken cancellationToken = default)
     {
-        var response = await _httpClient.PostAsync(
-            $"api/devices/{deviceId}/backup-jobs/recover-stale?timeoutMinutes={timeoutMinutes}",
-            content: null,
-            cancellationToken);
+        using var request =
+            await CreateRequestAsync(
+                HttpMethod.Post,
+                $"api/devices/{deviceId}/backup-jobs/recover-stale?timeoutMinutes={timeoutMinutes}");
+
+        using var response =
+            await _httpClient.SendAsync(request, cancellationToken);
 
         await EnsureSuccessAsync(response);
 
         var result =
-            await response.Content.ReadFromJsonAsync<RecoverStaleJobsResult>(
-                cancellationToken);
+            await response.Content.ReadFromJsonAsync<
+                RecoverStaleJobsResult>(cancellationToken);
 
         return result?.Recovered ?? 0;
+    }
+
+    private async Task<HttpRequestMessage> CreateRequestAsync(
+        HttpMethod method,
+        string requestUri,
+        object? content = null)
+    {
+        var request =
+            new HttpRequestMessage(
+                method,
+                requestUri);
+
+        var token =
+            await GetAccessTokenAsync();
+
+        var authenticated =
+            _httpContextAccessor
+                .HttpContext?
+                .User
+                .Identity?
+                .IsAuthenticated
+            ?? false;
+
+        _logger.LogInformation(
+            "Backup API request {Method} {Uri}. Web authenticated: {Authenticated}. Access token available: {HasToken}.",
+            method,
+            requestUri,
+            authenticated,
+            !string.IsNullOrWhiteSpace(token));
+
+        if (!string.IsNullOrWhiteSpace(token))
+        {
+            request.Headers.Authorization =
+                new AuthenticationHeaderValue(
+                    "Bearer",
+                    token);
+        }
+
+        if (content is not null)
+        {
+            request.Content =
+                JsonContent.Create(content);
+        }
+
+        return request;
+    }
+
+    private async Task<string?> GetAccessTokenAsync()
+    {
+        var httpContext =
+            _httpContextAccessor.HttpContext;
+
+        if (httpContext is null)
+            return null;
+
+        return await httpContext.GetTokenAsync(
+            "access_token");
     }
 
     private static async Task EnsureSuccessAsync(
@@ -429,7 +609,8 @@ public sealed class BackupApiClient
         if (response.IsSuccessStatusCode)
             return;
 
-        var message = await ReadErrorMessageAsync(response);
+        var message =
+            await ReadErrorMessageAsync(response);
 
         throw new InvalidOperationException(message);
     }
@@ -449,9 +630,18 @@ public sealed class BackupApiClient
         {
         }
 
-        return $"Backup API request failed with HTTP {(int)response.StatusCode} ({response.ReasonPhrase}).";
+        return
+            $"Backup API request failed with HTTP {(int)response.StatusCode} ({response.ReasonPhrase}).";
     }
 }
+
+public sealed record LoginRequest(
+    string Username,
+    string Password);
+
+public sealed record LoginResponse(
+    string AccessToken,
+    string TokenType);
 
 public sealed record CreateCustomerApiRequest(
     string Name,

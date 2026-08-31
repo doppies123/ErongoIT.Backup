@@ -27,6 +27,7 @@ public interface IBackupSnapshotService
 
     Task<BackupRestoreResult> RestoreAsync(
         Guid backupJobId,
+        IReadOnlyCollection<Guid> backupFileIds,
         string destinationPath,
         CancellationToken cancellationToken = default);
 }

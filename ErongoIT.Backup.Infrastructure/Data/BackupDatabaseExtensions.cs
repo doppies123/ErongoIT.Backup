@@ -1,6 +1,8 @@
 using ErongoIT.Backup.Application.Contracts;
 using ErongoIT.Backup.Application.Persistence;
+using ErongoIT.Backup.Application.Security;
 using ErongoIT.Backup.Infrastructure.Data.Repositories;
+using ErongoIT.Backup.Infrastructure.Security;
 using ErongoIT.Backup.Infrastructure.Storage;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -29,6 +31,9 @@ public static class BackupDatabaseExtensions
         services.AddScoped<IBackupJobRepository, BackupJobRepository>();
         services.AddScoped<IBackupFileRepository, BackupFileRepository>();
         services.AddScoped<IBackupContentRepository, BackupContentRepository>();
+        services.AddScoped<IUserRepository, UserRepository>();
+
+        services.AddSingleton<IPasswordService, PasswordService>();
 
         return services;
     }

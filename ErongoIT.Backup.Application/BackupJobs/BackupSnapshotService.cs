@@ -268,6 +268,7 @@ public sealed class BackupSnapshotService : IBackupSnapshotService
 
     public async Task<BackupRestoreResult> RestoreAsync(
         Guid backupJobId,
+        IReadOnlyCollection<Guid> backupFileIds,
         string destinationPath,
         CancellationToken cancellationToken = default)
     {
@@ -275,6 +276,14 @@ public sealed class BackupSnapshotService : IBackupSnapshotService
             throw new ArgumentException(
                 "Backup job ID is required.",
                 nameof(backupJobId));
+
+        if (backupFileIds is null)
+            throw new ArgumentNullException(nameof(backupFileIds));
+
+        if (backupFileIds.Count == 0)
+            throw new ArgumentException(
+                "At least one backup file must be selected.",
+                nameof(backupFileIds));
 
         if (string.IsNullOrWhiteSpace(destinationPath))
             throw new ArgumentException(
@@ -293,9 +302,24 @@ public sealed class BackupSnapshotService : IBackupSnapshotService
             throw new InvalidOperationException(
                 "Only completed backup jobs can be restored.");
 
-        var files = await _fileRepository.GetByBackupJobIdAsync(
+        var requestedIds = backupFileIds
+            .Where(x => x != Guid.Empty)
+            .Distinct()
+            .ToList();
+
+        if (requestedIds.Count == 0)
+            throw new ArgumentException(
+                "At least one valid backup file must be selected.",
+                nameof(backupFileIds));
+
+        var files = await _fileRepository.GetByIdsAsync(
             backupJobId,
+            requestedIds,
             cancellationToken);
+
+        if (files.Count != requestedIds.Count)
+            throw new InvalidOperationException(
+                "One or more selected backup files do not belong to the specified backup job.");
 
         var destinationRoot = Path.GetFullPath(
             destinationPath);

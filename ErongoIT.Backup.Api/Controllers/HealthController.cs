@@ -1,10 +1,12 @@
 using ErongoIT.Backup.Infrastructure.Data;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
 namespace ErongoIT.Backup.Api.Controllers;
 
 [ApiController]
+[AllowAnonymous]
 [Route("api/health")]
 public sealed class HealthController : ControllerBase
 {

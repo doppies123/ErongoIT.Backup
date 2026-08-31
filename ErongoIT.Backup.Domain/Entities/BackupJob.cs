@@ -68,6 +68,32 @@ public sealed class BackupJob
         ErrorMessage = null;
     }
 
+    public void UpdateProgress(
+        long bytesSelected,
+        long bytesUploaded)
+    {
+        if (Status != "Running")
+            throw new InvalidOperationException(
+                $"Backup job progress cannot be updated because its current status is '{Status}'.");
+
+        if (bytesSelected < 0)
+            throw new ArgumentOutOfRangeException(
+                nameof(bytesSelected));
+
+        if (bytesUploaded < 0)
+            throw new ArgumentOutOfRangeException(
+                nameof(bytesUploaded));
+
+        if (bytesUploaded > bytesSelected)
+            throw new ArgumentOutOfRangeException(
+                nameof(bytesUploaded),
+                bytesUploaded,
+                "Uploaded bytes cannot exceed selected bytes.");
+
+        BytesSelected = bytesSelected;
+        BytesUploaded = bytesUploaded;
+    }
+
     public void Complete(
         long bytesSelected,
         long bytesUploaded)
