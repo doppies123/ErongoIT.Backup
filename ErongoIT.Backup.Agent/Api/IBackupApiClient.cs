@@ -45,6 +45,13 @@ public interface IBackupApiClient
         string fileName,
         CancellationToken cancellationToken = default);
 
+    Task<ErongoIT.Backup.Agent.Backup.RegisterExistingFilesResponse> RegisterExistingFilesAsync(
+        Guid backupJobId,
+        Guid customerId,
+        Guid deviceId,
+        IReadOnlyList<ErongoIT.Backup.Agent.Backup.ExistingFileRequest> files,
+        CancellationToken cancellationToken = default);
+
     Task CompleteBackupJobAsync(
         Guid backupJobId,
         long bytesSelected,

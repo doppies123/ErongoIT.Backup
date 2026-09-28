@@ -12,6 +12,18 @@ public interface IBackupSnapshotService
         Stream data,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Records files whose content the server already holds (matched by
+    /// SHA-256 and size) against the backup job without uploading them.
+    /// Returns the relative paths the client still has to upload.
+    /// </summary>
+    Task<RegisterExistingFilesResult> RegisterExistingFilesAsync(
+        Guid customerId,
+        Guid deviceId,
+        Guid backupJobId,
+        IReadOnlyCollection<ExistingFileCandidate> files,
+        CancellationToken cancellationToken = default);
+
     Task<IReadOnlyList<BackupFile>> GetFilesAsync(
         Guid backupJobId,
         CancellationToken cancellationToken = default);
@@ -42,3 +54,13 @@ public sealed record BackupRestoreResult(
     string DestinationPath,
     int FilesRestored,
     long BytesRestored);
+
+public sealed record ExistingFileCandidate(
+    string RelativePath,
+    string Sha256,
+    long SizeBytes);
+
+public sealed record RegisterExistingFilesResult(
+    int RegisteredCount,
+    long RegisteredBytes,
+    IReadOnlyList<string> MissingRelativePaths);

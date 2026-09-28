@@ -85,21 +85,21 @@ docker compose up -d --no-deps --force-recreate api
 rm -rf deploy-parts api-build api-app.tar.gz
 
 set +e
-echo "--- waiting for API health ---"
-HEALTH=""
-for i in \$(seq 1 30); do
-  HEALTH=\$(curl -s -m 3 http://localhost:5230/api/health)
-  [ -n "\$HEALTH" ] && break
-  sleep 2
-done
+sleep 3
 docker ps --format "table {{.Names}}\t{{.Status}}"
-echo "--- health ---"
-echo "\$HEALTH"
 echo "--- last API log lines ---"
-docker logs erongoit-backup-api --tail 15 2>&1
-[ -n "\$HEALTH" ]
+docker logs erongoit-backup-api --tail 8 2>&1
 REMOTE
 
-RESULT=$?
+echo "=== 5. Checking public health (https://backup.erongoit.com) ==="
+HEALTH=""
+for i in $(seq 1 30); do
+  HEALTH=$(curl -s -m 5 https://backup.erongoit.com/api/health)
+  echo "$HEALTH" | grep -q '"Healthy"' && break
+  HEALTH=""
+  sleep 2
+done
+echo "$HEALTH"
+
 rm -rf publish-api deploy-parts api-app.tar.gz
-[ $RESULT -eq 0 ] && echo "=== DEPLOY COMPLETE ===" || echo "=== DEPLOY FAILED ==="
+[ -n "$HEALTH" ] && echo "=== DEPLOY COMPLETE ===" || echo "=== DEPLOY FAILED (API not healthy) ==="

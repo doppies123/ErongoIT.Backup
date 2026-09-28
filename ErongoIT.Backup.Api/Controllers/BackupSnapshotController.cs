@@ -74,6 +74,47 @@ public sealed class BackupSnapshotController : ControllerBase
         }
     }
 
+    [HttpPost("{backupJobId:guid}/files/existing")]
+    public async Task<ActionResult<RegisterExistingFilesResult>> RegisterExistingFiles(
+        Guid backupJobId,
+        [FromBody] RegisterExistingFilesRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (request is null)
+        {
+            return BadRequest(new
+            {
+                error = "A request body is required."
+            });
+        }
+
+        try
+        {
+            var result = await _service.RegisterExistingFilesAsync(
+                request.CustomerId,
+                request.DeviceId,
+                backupJobId,
+                request.Files ?? Array.Empty<ExistingFileCandidate>(),
+                cancellationToken);
+
+            return Ok(result);
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new
+            {
+                error = ex.Message
+            });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new
+            {
+                error = ex.Message
+            });
+        }
+    }
+
     [HttpGet("{backupJobId:guid}/files")]
     public async Task<ActionResult<IReadOnlyList<BackupFile>>> GetFiles(
         Guid backupJobId,
@@ -176,3 +217,8 @@ public sealed class BackupSnapshotController : ControllerBase
 public sealed record RestoreBackupRequest(
     IReadOnlyCollection<Guid> BackupFileIds,
     string DestinationPath);
+
+public sealed record RegisterExistingFilesRequest(
+    Guid CustomerId,
+    Guid DeviceId,
+    IReadOnlyList<ExistingFileCandidate>? Files);

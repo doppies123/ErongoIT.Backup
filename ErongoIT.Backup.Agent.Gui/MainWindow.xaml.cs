@@ -606,8 +606,11 @@ public partial class MainWindow : Window
         long bytesSelected =
             files.Sum(x => x.Length);
 
+        long bytesProcessed = 0;
         long bytesUploaded = 0;
         var filesUploaded = 0;
+        var filesSkipped = 0;
+        var filesChecked = 0;
 
         BackupProgressText.Text =
             $"Found {files.Count:N0} file(s).";
@@ -628,62 +631,152 @@ public partial class MainWindow : Window
 
         CurrentJobStatus.Text = "Running";
 
+        void ShowProgress(
+            long currentFileBytes,
+            string message)
+        {
+            var done = bytesProcessed + currentFileBytes;
+
+            var percent =
+                bytesSelected > 0
+                    ? done * 100.0 / bytesSelected
+                    : 0;
+
+            percent = Math.Clamp(percent, 0, 100);
+
+            BackupProgress.Value = percent;
+            BackupProgressPercent.Text = $"{percent:0}%";
+            BackupProgressText.Text = message;
+        }
+
         try
         {
-            foreach (var file in files)
+            const int batchSize = 200;
+
+            for (var index = 0; index < files.Count; index += batchSize)
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                var fileInfo =
-                    new FileInfo(file.FullPath);
+                var batch = files
+                    .Skip(index)
+                    .Take(batchSize)
+                    .ToList();
 
-                if (!fileInfo.Exists)
-                    continue;
+                // 1. Hash locally (off the UI thread).
+                var requests =
+                    new List<ErongoIT.Backup.Agent.Backup.ExistingFileRequest>();
 
-                BackupProgressText.Text =
-                    $"Uploading {file.RelativePath}";
+                foreach (var file in batch)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
 
-                await using var stream =
-                    new FileStream(
-                        file.FullPath,
-                        FileMode.Open,
-                        FileAccess.Read,
-                        FileShare.Read,
-                        1024 * 1024,
-                        useAsync: true);
+                    filesChecked++;
 
-                await _api.UploadFileAsync(
-                    job.Id,
-                    _options.CustomerId,
-                    _options.DeviceId,
-                    file.RelativePath,
-                    stream,
-                    Path.GetFileName(file.FullPath),
-                    cancellationToken);
-
-                bytesUploaded += file.Length;
-                filesUploaded++;
-
-                var percent =
-                    bytesSelected > 0
-                        ? bytesUploaded * 100.0 /
-                          bytesSelected
-                        : 0;
-
-                BackupProgress.Value =
-                    Math.Clamp(
-                        percent,
+                    ShowProgress(
                         0,
-                        100);
+                        $"Checking {filesChecked:N0} of {files.Count:N0}: {file.RelativePath}");
 
-                BackupProgressPercent.Text =
-                    $"{percent:0}%";
+                    try
+                    {
+                        var sha256 = await Task.Run(
+                            () => ErongoIT.Backup.Agent.Backup.FileHashing
+                                .ComputeSha256Async(
+                                    file.FullPath,
+                                    cancellationToken),
+                            cancellationToken);
 
-                BackupProgressText.Text =
-                    $"{filesUploaded:N0} of {files.Count:N0} files • " +
-                    $"{FormatBytes(bytesUploaded)} of " +
-                    $"{FormatBytes(bytesSelected)}";
+                        requests.Add(
+                            new ErongoIT.Backup.Agent.Backup.ExistingFileRequest(
+                                file.RelativePath,
+                                sha256,
+                                file.Length));
+                    }
+                    catch (Exception ex) when (
+                        ex is IOException or UnauthorizedAccessException)
+                    {
+                        // Locked or unreadable file: skip it, keep going.
+                        bytesSelected -= file.Length;
+                    }
+                }
+
+                // 2. Ask the server which files it already has.
+                var result =
+                    await _api.RegisterExistingFilesAsync(
+                        job.Id,
+                        _options.CustomerId,
+                        _options.DeviceId,
+                        requests,
+                        cancellationToken);
+
+                var missing =
+                    result.MissingRelativePaths
+                        .ToHashSet(StringComparer.Ordinal);
+
+                filesSkipped += result.RegisteredCount;
+                bytesProcessed += result.RegisteredBytes;
+
+                ShowProgress(
+                    0,
+                    $"{filesSkipped:N0} unchanged file(s) already backed up");
+
+                // 3. Upload only new or changed files, with live progress.
+                foreach (var file in batch)
+                {
+                    if (!missing.Contains(file.RelativePath))
+                        continue;
+
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    var fileLength = file.Length;
+                    var relativePath = file.RelativePath;
+
+                    var progress = new Progress<long>(sent =>
+                    {
+                        var filePercent =
+                            fileLength > 0
+                                ? sent * 100.0 / fileLength
+                                : 100;
+
+                        ShowProgress(
+                            Math.Min(sent, fileLength),
+                            $"Uploading {relativePath} • " +
+                            $"{FormatBytes(sent)} of {FormatBytes(fileLength)} " +
+                            $"({filePercent:0}%)");
+                    });
+
+                    ShowProgress(
+                        0,
+                        $"Uploading {relativePath}");
+
+                    await using (var stream =
+                        new ErongoIT.Backup.Agent.Backup.ProgressReadStream(
+                            ErongoIT.Backup.Agent.Backup.FileHashing
+                                .OpenForUpload(file.FullPath),
+                            sent => ((IProgress<long>)progress).Report(sent)))
+                    {
+                        await _api.UploadFileAsync(
+                            job.Id,
+                            _options.CustomerId,
+                            _options.DeviceId,
+                            relativePath,
+                            stream,
+                            Path.GetFileName(file.FullPath),
+                            cancellationToken);
+                    }
+
+                    bytesUploaded += fileLength;
+                    bytesProcessed += fileLength;
+                    filesUploaded++;
+
+                    ShowProgress(
+                        0,
+                        $"{filesUploaded:N0} uploaded • {filesSkipped:N0} unchanged • " +
+                        $"{FormatBytes(bytesProcessed)} of {FormatBytes(bytesSelected)}");
+                }
             }
+
+            bytesSelected = Math.Max(bytesSelected, 0);
+            bytesUploaded = Math.Min(bytesUploaded, bytesSelected);
 
             await _api.CompleteBackupJobAsync(
                 job.Id,
@@ -695,8 +788,8 @@ public partial class MainWindow : Window
             BackupProgressPercent.Text = "100%";
 
             BackupProgressText.Text =
-                $"{filesUploaded:N0} files uploaded • " +
-                $"{FormatBytes(bytesUploaded)}";
+                $"{filesUploaded:N0} uploaded ({FormatBytes(bytesUploaded)}) • " +
+                $"{filesSkipped:N0} unchanged";
 
             CurrentJobStatus.Text = "Completed";
         }

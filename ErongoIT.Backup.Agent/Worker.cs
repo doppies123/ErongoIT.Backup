@@ -1,4 +1,5 @@
 using ErongoIT.Backup.Agent.Api;
+using ErongoIT.Backup.Agent.Backup;
 using ErongoIT.Backup.Agent.Configuration;
 using Microsoft.Extensions.Options;
 
@@ -514,65 +515,134 @@ public sealed class Worker : BackgroundService
                     _options.SourcePath,
                     "*",
                     SearchOption.AllDirectories)
+                .Select(path => new FileInfo(path))
+                .Where(info => info.Exists)
+                .Select(info => (
+                    FullPath: info.FullName,
+                    RelativePath: Path.GetRelativePath(
+                        _options.SourcePath,
+                        info.FullName),
+                    Length: info.Length))
                 .ToList();
 
             _logger.LogInformation(
                 "Found {FileCount} file(s) in source.",
                 files.Count);
 
-            long bytesSelected = 0;
+            long bytesSelected = files.Sum(x => x.Length);
+            long bytesProcessed = 0;
             long bytesUploaded = 0;
             var filesUploaded = 0;
+            var filesSkipped = 0;
 
-            foreach (var filePath in files)
+            const int batchSize = 200;
+
+            for (var index = 0; index < files.Count; index += batchSize)
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                var fileInfo =
-                    new FileInfo(filePath);
+                var batch = files
+                    .Skip(index)
+                    .Take(batchSize)
+                    .ToList();
 
-                if (!fileInfo.Exists)
+                // 1. Hash locally.
+                var requests = new List<ExistingFileRequest>();
+
+                foreach (var file in batch)
                 {
-                    _logger.LogWarning(
-                        "File disappeared before processing: {FilePath}.",
-                        filePath);
+                    cancellationToken.ThrowIfCancellationRequested();
 
-                    continue;
+                    try
+                    {
+                        var sha256 = await FileHashing.ComputeSha256Async(
+                            file.FullPath,
+                            cancellationToken);
+
+                        requests.Add(new ExistingFileRequest(
+                            file.RelativePath,
+                            sha256,
+                            file.Length));
+                    }
+                    catch (Exception ex) when (
+                        ex is IOException or UnauthorizedAccessException)
+                    {
+                        _logger.LogWarning(
+                            "Skipping unreadable file {RelativePath}: {Message}",
+                            file.RelativePath,
+                            ex.Message);
+
+                        bytesSelected -= file.Length;
+                    }
                 }
 
-                var relativePath =
-                    Path.GetRelativePath(
-                        _options.SourcePath,
-                        filePath);
-
-                bytesSelected += fileInfo.Length;
-
-                _logger.LogInformation(
-                    "Uploading {RelativePath} ({Bytes} bytes).",
-                    relativePath,
-                    fileInfo.Length);
-
-                await using var stream =
-                    new FileStream(
-                        filePath,
-                        FileMode.Open,
-                        FileAccess.Read,
-                        FileShare.Read,
-                        bufferSize: 1024 * 1024,
-                        useAsync: true);
-
-                await _api.UploadFileAsync(
+                // 2. Ask the server which ones it already has.
+                var result = await _api.RegisterExistingFilesAsync(
                     job.Id,
                     _options.CustomerId,
                     _options.DeviceId,
-                    relativePath,
-                    stream,
-                    Path.GetFileName(filePath),
+                    requests,
                     cancellationToken);
 
-                bytesUploaded += fileInfo.Length;
-                filesUploaded++;
+                var missing = result.MissingRelativePaths
+                    .ToHashSet(StringComparer.Ordinal);
+
+                filesSkipped += result.RegisteredCount;
+                bytesProcessed += result.RegisteredBytes;
+
+                // 3. Upload only new or changed files.
+                foreach (var file in batch)
+                {
+                    if (!missing.Contains(file.RelativePath))
+                        continue;
+
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    _logger.LogInformation(
+                        "Uploading {RelativePath} ({Bytes} bytes).",
+                        file.RelativePath,
+                        file.Length);
+
+                    await using var stream =
+                        FileHashing.OpenForUpload(file.FullPath);
+
+                    await _api.UploadFileAsync(
+                        job.Id,
+                        _options.CustomerId,
+                        _options.DeviceId,
+                        file.RelativePath,
+                        stream,
+                        Path.GetFileName(file.FullPath),
+                        cancellationToken);
+
+                    bytesUploaded += file.Length;
+                    bytesProcessed += file.Length;
+                    filesUploaded++;
+                }
+
+                try
+                {
+                    await _api.UpdateProgressAsync(
+                        job.Id,
+                        bytesSelected,
+                        Math.Min(bytesProcessed, bytesSelected),
+                        cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(
+                        "Progress update failed: {Message}",
+                        ex.Message);
+                }
             }
+
+            bytesSelected = Math.Max(bytesSelected, 0);
+            bytesUploaded = Math.Min(bytesUploaded, bytesSelected);
+
+            _logger.LogInformation(
+                "Unchanged files skipped: {Skipped}. New/changed files uploaded: {Uploaded}.",
+                filesSkipped,
+                filesUploaded);
 
             await _api.CompleteBackupJobAsync(
                 job.Id,

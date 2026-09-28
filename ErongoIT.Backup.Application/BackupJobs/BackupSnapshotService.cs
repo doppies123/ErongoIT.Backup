@@ -83,21 +83,42 @@ public sealed class BackupSnapshotService : IBackupSnapshotService
         var normalizedRelativePath =
             ValidateRelativePath(relativePath);
 
-        using var sha256 = SHA256.Create();
+        // Stream the upload to a temporary file on disk while hashing it.
+        // Never buffer the whole file in memory: the VPS has 1 GB RAM and
+        // backups can contain multi-GB files.
+        var temporaryPath = Path.Combine(
+            Path.GetTempPath(),
+            $"erongoit-upload-{Guid.NewGuid():N}.tmp");
 
-        await using var temporaryStream = new MemoryStream();
+        await using var temporaryStream = new FileStream(
+            temporaryPath,
+            FileMode.CreateNew,
+            FileAccess.ReadWrite,
+            FileShare.None,
+            bufferSize: 1024 * 1024,
+            FileOptions.Asynchronous | FileOptions.DeleteOnClose);
 
-        await data.CopyToAsync(
-            temporaryStream,
-            cancellationToken);
+        using var hasher = IncrementalHash.CreateHash(
+            HashAlgorithmName.SHA256);
 
-        temporaryStream.Position = 0;
+        var buffer = new byte[1024 * 1024];
+        int bytesRead;
 
-        var hashBytes = await sha256.ComputeHashAsync(
-            temporaryStream,
-            cancellationToken);
+        while ((bytesRead = await data.ReadAsync(
+                   buffer.AsMemory(0, buffer.Length),
+                   cancellationToken)) > 0)
+        {
+            hasher.AppendData(buffer, 0, bytesRead);
 
-        var sha256Hash = Convert.ToHexString(hashBytes)
+            await temporaryStream.WriteAsync(
+                buffer.AsMemory(0, bytesRead),
+                cancellationToken);
+        }
+
+        await temporaryStream.FlushAsync(cancellationToken);
+
+        var sha256Hash = Convert.ToHexString(
+                hasher.GetHashAndReset())
             .ToLowerInvariant();
 
         var sizeBytes = temporaryStream.Length;
@@ -164,6 +185,185 @@ public sealed class BackupSnapshotService : IBackupSnapshotService
             cancellationToken);
 
         return backupFile;
+    }
+
+    public const int MaxExistingFilesPerRequest = 1000;
+
+    public async Task<RegisterExistingFilesResult> RegisterExistingFilesAsync(
+        Guid customerId,
+        Guid deviceId,
+        Guid backupJobId,
+        IReadOnlyCollection<ExistingFileCandidate> files,
+        CancellationToken cancellationToken = default)
+    {
+        if (files is null)
+            throw new ArgumentNullException(nameof(files));
+
+        if (files.Count > MaxExistingFilesPerRequest)
+            throw new ArgumentException(
+                $"A maximum of {MaxExistingFilesPerRequest} files can be checked per request.",
+                nameof(files));
+
+        if (customerId == Guid.Empty)
+            throw new ArgumentException(
+                "Customer ID is required.",
+                nameof(customerId));
+
+        if (deviceId == Guid.Empty)
+            throw new ArgumentException(
+                "Device ID is required.",
+                nameof(deviceId));
+
+        if (backupJobId == Guid.Empty)
+            throw new ArgumentException(
+                "Backup job ID is required.",
+                nameof(backupJobId));
+
+        var job = await _jobRepository.GetByIdAsync(
+            backupJobId,
+            cancellationToken);
+
+        if (job is null)
+            throw new InvalidOperationException(
+                "Backup job was not found.");
+
+        if (job.CustomerId != customerId)
+            throw new InvalidOperationException(
+                "Backup job does not belong to the specified customer.");
+
+        if (job.DeviceId != deviceId)
+            throw new InvalidOperationException(
+                "Backup job does not belong to the specified device.");
+
+        if (job.Status != "Running")
+            throw new InvalidOperationException(
+                "Files can only be added to a running backup job.");
+
+        var missing = new List<string>();
+
+        if (files.Count == 0)
+        {
+            return new RegisterExistingFilesResult(
+                0,
+                0,
+                missing);
+        }
+
+        var candidates =
+            new List<(string OriginalPath, string NormalizedPath, string Sha256, long SizeBytes)>();
+
+        foreach (var file in files)
+        {
+            if (file is null ||
+                string.IsNullOrWhiteSpace(file.RelativePath))
+            {
+                continue;
+            }
+
+            var normalizedPath =
+                ValidateRelativePath(file.RelativePath);
+
+            var sha256 =
+                (file.Sha256 ?? string.Empty)
+                .Trim()
+                .ToLowerInvariant();
+
+            if (sha256.Length != 64 ||
+                !sha256.All(Uri.IsHexDigit) ||
+                file.SizeBytes < 0)
+            {
+                missing.Add(file.RelativePath);
+                continue;
+            }
+
+            candidates.Add((
+                file.RelativePath,
+                normalizedPath,
+                sha256,
+                file.SizeBytes));
+        }
+
+        var contents =
+            await _contentRepository.GetBySha256ManyAsync(
+                candidates
+                    .Select(x => x.Sha256)
+                    .Distinct()
+                    .ToList(),
+                cancellationToken);
+
+        var existingPaths =
+            (await _fileRepository.GetByBackupJobIdAsync(
+                backupJobId,
+                cancellationToken))
+            .Select(x => x.RelativePath)
+            .ToHashSet(StringComparer.Ordinal);
+
+        var physicalExists =
+            new Dictionary<string, bool>(StringComparer.Ordinal);
+
+        var registeredCount = 0;
+        long registeredBytes = 0;
+
+        foreach (var candidate in candidates)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (existingPaths.Contains(candidate.NormalizedPath))
+            {
+                // Already recorded in this job (e.g. the client retried).
+                registeredCount++;
+                registeredBytes += candidate.SizeBytes;
+                continue;
+            }
+
+            if (!contents.TryGetValue(
+                    candidate.Sha256,
+                    out var content) ||
+                content.SizeBytes != candidate.SizeBytes)
+            {
+                missing.Add(candidate.OriginalPath);
+                continue;
+            }
+
+            if (!physicalExists.TryGetValue(
+                    candidate.Sha256,
+                    out var exists))
+            {
+                exists = await _contentStorage.ExistsAsync(
+                    candidate.Sha256,
+                    cancellationToken);
+
+                physicalExists[candidate.Sha256] = exists;
+            }
+
+            if (!exists)
+            {
+                // Database knows the hash but the file is gone:
+                // ask the client to upload it so storage self-heals.
+                missing.Add(candidate.OriginalPath);
+                continue;
+            }
+
+            await _fileRepository.AddAsync(
+                new BackupFile(
+                    backupJobId,
+                    content.Id,
+                    candidate.NormalizedPath),
+                cancellationToken);
+
+            existingPaths.Add(candidate.NormalizedPath);
+
+            registeredCount++;
+            registeredBytes += content.SizeBytes;
+        }
+
+        await _fileRepository.SaveChangesAsync(
+            cancellationToken);
+
+        return new RegisterExistingFilesResult(
+            registeredCount,
+            registeredBytes,
+            missing);
     }
 
     public async Task<IReadOnlyList<BackupFile>> GetFilesAsync(

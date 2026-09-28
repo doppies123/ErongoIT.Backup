@@ -30,6 +30,30 @@ public sealed class BackupContentRepository : IBackupContentRepository
                 cancellationToken);
     }
 
+    public async Task<IReadOnlyDictionary<string, BackupContent>> GetBySha256ManyAsync(
+        IReadOnlyCollection<string> sha256Hashes,
+        CancellationToken cancellationToken = default)
+    {
+        if (sha256Hashes is null || sha256Hashes.Count == 0)
+            return new Dictionary<string, BackupContent>();
+
+        var normalized = sha256Hashes
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x.Trim().ToLowerInvariant())
+            .Distinct()
+            .ToList();
+
+        if (normalized.Count == 0)
+            return new Dictionary<string, BackupContent>();
+
+        return await _db.BackupContents
+            .AsNoTracking()
+            .Where(x => normalized.Contains(x.Sha256))
+            .ToDictionaryAsync(
+                x => x.Sha256,
+                cancellationToken);
+    }
+
     public Task<BackupContent?> GetByIdAsync(
         Guid id,
         CancellationToken cancellationToken = default)

@@ -23,6 +23,56 @@ public sealed class BackupGuiApiClient
         };
     }
 
+    public async Task LoginAsync(
+        string username,
+        string password,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(username))
+        {
+            throw new InvalidOperationException(
+                "API username was not configured.");
+        }
+
+        if (string.IsNullOrWhiteSpace(password))
+        {
+            throw new InvalidOperationException(
+                "API password was not configured.");
+        }
+
+        var response =
+            await _httpClient.PostAsJsonAsync(
+                "api/auth/login",
+                new LoginRequest(
+                    username,
+                    password),
+                JsonOptions,
+                cancellationToken);
+
+        await EnsureSuccessAsync(
+            response,
+            cancellationToken);
+
+        var loginResponse =
+            await response.Content.ReadFromJsonAsync<
+                LoginResponse>(
+                JsonOptions,
+                cancellationToken);
+
+        if (loginResponse is null ||
+            string.IsNullOrWhiteSpace(
+                loginResponse.AccessToken))
+        {
+            throw new InvalidOperationException(
+                "Backup API returned an invalid login response.");
+        }
+
+        _httpClient.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue(
+                loginResponse.TokenType,
+                loginResponse.AccessToken);
+    }
+
     public async Task<DeviceDto?> GetDeviceAsync(
         Guid deviceId,
         CancellationToken cancellationToken = default)
@@ -41,14 +91,16 @@ public sealed class BackupGuiApiClient
             response,
             cancellationToken);
 
-        return await response.Content.ReadFromJsonAsync<DeviceDto>(
+        return await response.Content.ReadFromJsonAsync<
+            DeviceDto>(
             JsonOptions,
             cancellationToken);
     }
 
-    public async Task<IReadOnlyList<BackupPlanDto>> GetBackupPlansAsync(
-        Guid customerId,
-        CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<BackupPlanDto>>
+        GetBackupPlansAsync(
+            Guid customerId,
+            CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.GetAsync(
             $"api/customers/{customerId}/backup-plans",
@@ -60,14 +112,15 @@ public sealed class BackupGuiApiClient
 
         return await response.Content.ReadFromJsonAsync<
             IReadOnlyList<BackupPlanDto>>(
-                JsonOptions,
-                cancellationToken)
+            JsonOptions,
+            cancellationToken)
             ?? Array.Empty<BackupPlanDto>();
     }
 
-    public async Task<IReadOnlyList<BackupJobDto>> GetBackupJobsAsync(
-        Guid deviceId,
-        CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<BackupJobDto>>
+        GetBackupJobsAsync(
+            Guid deviceId,
+            CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.GetAsync(
             $"api/devices/{deviceId}/backup-jobs",
@@ -79,14 +132,15 @@ public sealed class BackupGuiApiClient
 
         return await response.Content.ReadFromJsonAsync<
             IReadOnlyList<BackupJobDto>>(
-                JsonOptions,
-                cancellationToken)
+            JsonOptions,
+            cancellationToken)
             ?? Array.Empty<BackupJobDto>();
     }
 
-    public async Task<IReadOnlyList<BackupFileDto>> GetBackupFilesAsync(
-        Guid backupJobId,
-        CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<BackupFileDto>>
+        GetBackupFilesAsync(
+            Guid backupJobId,
+            CancellationToken cancellationToken = default)
     {
         var response = await _httpClient.GetAsync(
             $"api/backup-snapshots/{backupJobId}/files",
@@ -98,30 +152,38 @@ public sealed class BackupGuiApiClient
 
         return await response.Content.ReadFromJsonAsync<
             IReadOnlyList<BackupFileDto>>(
-                JsonOptions,
-                cancellationToken)
+            JsonOptions,
+            cancellationToken)
             ?? Array.Empty<BackupFileDto>();
     }
 
-    public async Task<BackupRestoreResultDto> RestoreBackupAsync(
-        Guid backupJobId,
-        IReadOnlyCollection<Guid> backupFileIds,
-        string destinationPath,
-        CancellationToken cancellationToken = default)
+    public async Task<BackupRestoreResultDto>
+        RestoreBackupAsync(
+            Guid backupJobId,
+            IReadOnlyCollection<Guid> backupFileIds,
+            string destinationPath,
+            CancellationToken cancellationToken = default)
     {
         if (backupJobId == Guid.Empty)
+        {
             throw new ArgumentException(
                 "Backup job ID is required.",
                 nameof(backupJobId));
+        }
 
         if (backupFileIds is null)
+        {
             throw new ArgumentNullException(
                 nameof(backupFileIds));
+        }
 
-        if (string.IsNullOrWhiteSpace(destinationPath))
+        if (string.IsNullOrWhiteSpace(
+            destinationPath))
+        {
             throw new ArgumentException(
                 "Destination path is required.",
                 nameof(destinationPath));
+        }
 
         var selectedIds =
             backupFileIds
@@ -130,9 +192,11 @@ public sealed class BackupGuiApiClient
                 .ToList();
 
         if (selectedIds.Count == 0)
+        {
             throw new ArgumentException(
                 "At least one backup file must be selected.",
                 nameof(backupFileIds));
+        }
 
         var response =
             await _httpClient.PostAsJsonAsync(
@@ -157,32 +221,34 @@ public sealed class BackupGuiApiClient
                    "Backup API returned an empty restore result.");
     }
 
-
-    public async Task<BackupJobDto> CreateBackupJobAsync(
-        Guid customerId,
-        Guid deviceId,
-        Guid backupPlanId,
-        int type,
-        CancellationToken cancellationToken = default)
+    public async Task<BackupJobDto>
+        CreateBackupJobAsync(
+            Guid customerId,
+            Guid deviceId,
+            Guid backupPlanId,
+            int type,
+            CancellationToken cancellationToken = default)
     {
-        var response = await _httpClient.PostAsJsonAsync(
-            $"api/customers/{customerId}/backup-jobs",
-            new
-            {
-                deviceId,
-                backupPlanId,
-                type
-            },
-            JsonOptions,
-            cancellationToken);
+        var response =
+            await _httpClient.PostAsJsonAsync(
+                $"api/customers/{customerId}/backup-jobs",
+                new
+                {
+                    deviceId,
+                    backupPlanId,
+                    type
+                },
+                JsonOptions,
+                cancellationToken);
 
         await EnsureSuccessAsync(
             response,
             cancellationToken);
 
-        return await response.Content.ReadFromJsonAsync<BackupJobDto>(
-                   JsonOptions,
-                   cancellationToken)
+        return await response.Content.ReadFromJsonAsync<
+                   BackupJobDto>(
+                       JsonOptions,
+                       cancellationToken)
                ?? throw new InvalidOperationException(
                    "Backup API returned an empty backup job.");
     }
@@ -191,10 +257,11 @@ public sealed class BackupGuiApiClient
         Guid backupJobId,
         CancellationToken cancellationToken = default)
     {
-        var response = await _httpClient.PostAsync(
-            $"api/backup-jobs/{backupJobId}/start",
-            null,
-            cancellationToken);
+        var response =
+            await _httpClient.PostAsync(
+                $"api/backup-jobs/{backupJobId}/start",
+                null,
+                cancellationToken);
 
         await EnsureSuccessAsync(
             response,
@@ -206,15 +273,21 @@ public sealed class BackupGuiApiClient
         Guid customerId,
         Guid deviceId,
         string relativePath,
-        System.IO.Stream content,
+        Stream content,
         string fileName,
         CancellationToken cancellationToken = default)
     {
         if (content is null)
-            throw new ArgumentNullException(nameof(content));
+        {
+            throw new ArgumentNullException(
+                nameof(content));
+        }
 
-        using var form = new MultipartFormDataContent();
-        using var streamContent = new StreamContent(content);
+        using var form =
+            new MultipartFormDataContent();
+
+        using var streamContent =
+            new StreamContent(content);
 
         streamContent.Headers.ContentType =
             new MediaTypeHeaderValue(
@@ -231,14 +304,46 @@ public sealed class BackupGuiApiClient
             $"&deviceId={Uri.EscapeDataString(deviceId.ToString())}" +
             $"&relativePath={Uri.EscapeDataString(relativePath)}";
 
-        var response = await _httpClient.PostAsync(
-            url,
-            form,
-            cancellationToken);
+        var response =
+            await _httpClient.PostAsync(
+                url,
+                form,
+                cancellationToken);
 
         await EnsureSuccessAsync(
             response,
             cancellationToken);
+    }
+
+    public async Task<ErongoIT.Backup.Agent.Backup.RegisterExistingFilesResponse> RegisterExistingFilesAsync(
+        Guid backupJobId,
+        Guid customerId,
+        Guid deviceId,
+        IReadOnlyList<ErongoIT.Backup.Agent.Backup.ExistingFileRequest> files,
+        CancellationToken cancellationToken = default)
+    {
+        var response =
+            await _httpClient.PostAsJsonAsync(
+                $"api/backup-snapshots/{backupJobId}/files/existing",
+                new
+                {
+                    customerId,
+                    deviceId,
+                    files
+                },
+                JsonOptions,
+                cancellationToken);
+
+        await EnsureSuccessAsync(
+            response,
+            cancellationToken);
+
+        return await response.Content
+                   .ReadFromJsonAsync<ErongoIT.Backup.Agent.Backup.RegisterExistingFilesResponse>(
+                       JsonOptions,
+                       cancellationToken)
+               ?? throw new InvalidOperationException(
+                   "The backup API returned an empty response when checking existing files.");
     }
 
     public async Task CompleteBackupJobAsync(
@@ -247,15 +352,16 @@ public sealed class BackupGuiApiClient
         long bytesUploaded,
         CancellationToken cancellationToken = default)
     {
-        var response = await _httpClient.PostAsJsonAsync(
-            $"api/backup-jobs/{backupJobId}/complete",
-            new
-            {
-                bytesSelected,
-                bytesUploaded
-            },
-            JsonOptions,
-            cancellationToken);
+        var response =
+            await _httpClient.PostAsJsonAsync(
+                $"api/backup-jobs/{backupJobId}/complete",
+                new
+                {
+                    bytesSelected,
+                    bytesUploaded
+                },
+                JsonOptions,
+                cancellationToken);
 
         await EnsureSuccessAsync(
             response,
@@ -267,14 +373,15 @@ public sealed class BackupGuiApiClient
         string errorMessage,
         CancellationToken cancellationToken = default)
     {
-        var response = await _httpClient.PostAsJsonAsync(
-            $"api/backup-jobs/{backupJobId}/fail",
-            new
-            {
-                errorMessage
-            },
-            JsonOptions,
-            cancellationToken);
+        var response =
+            await _httpClient.PostAsJsonAsync(
+                $"api/backup-jobs/{backupJobId}/fail",
+                new
+                {
+                    errorMessage
+                },
+                JsonOptions,
+                cancellationToken);
 
         await EnsureSuccessAsync(
             response,
@@ -288,13 +395,22 @@ public sealed class BackupGuiApiClient
         if (response.IsSuccessStatusCode)
             return;
 
-        var body = await response.Content.ReadAsStringAsync(
-            cancellationToken);
+        var body =
+            await response.Content.ReadAsStringAsync(
+                cancellationToken);
 
         throw new HttpRequestException(
             $"Backup API request failed with HTTP " +
             $"{(int)response.StatusCode}: {body}");
     }
+
+    private sealed record LoginRequest(
+        string Username,
+        string Password);
+
+    private sealed record LoginResponse(
+        string AccessToken,
+        string TokenType);
 }
 
 public sealed record DeviceDto(

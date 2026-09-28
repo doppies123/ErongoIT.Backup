@@ -8,6 +8,10 @@ public interface IBackupContentRepository
         string sha256,
         CancellationToken cancellationToken = default);
 
+    Task<IReadOnlyDictionary<string, BackupContent>> GetBySha256ManyAsync(
+        IReadOnlyCollection<string> sha256Hashes,
+        CancellationToken cancellationToken = default);
+
     Task<BackupContent?> GetByIdAsync(
         Guid id,
         CancellationToken cancellationToken = default);
