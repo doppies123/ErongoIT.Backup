@@ -58,7 +58,7 @@ public sealed class BackupPlan
         CustomerId = customerId;
         Name = name.Trim();
         ScheduleType = scheduleType;
-        IntervalMinutes = intervalMinutes;
+        IntervalMinutes = NormalizeInterval(scheduleType, intervalMinutes);
         ScheduleTimeMinutes = scheduleTimeMinutes;
         ScheduleDayOfWeek = scheduleDayOfWeek;
         RetentionDays = retentionDays;
@@ -78,7 +78,7 @@ public sealed class BackupPlan
         ValidateRetention(retentionDays);
 
         ScheduleType = scheduleType;
-        IntervalMinutes = intervalMinutes;
+        IntervalMinutes = NormalizeInterval(scheduleType, intervalMinutes);
         ScheduleTimeMinutes = scheduleTimeMinutes;
         ScheduleDayOfWeek = scheduleDayOfWeek;
         RetentionDays = retentionDays;
@@ -116,6 +116,19 @@ public sealed class BackupPlan
                 nameof(intervalMinutes),
                 intervalMinutes,
                 "Continuous backup interval must be at least 15 minutes.");
+    }
+
+    // The interval only matters for Continuous plans, but the database
+    // requires IntervalMinutes >= 15 for every row. Daily/Weekly plans
+    // (where the portal sends 0) therefore store a harmless minimum.
+    private static int NormalizeInterval(
+        BackupScheduleType scheduleType,
+        int intervalMinutes)
+    {
+        if (scheduleType == BackupScheduleType.Continuous)
+            return intervalMinutes;
+
+        return Math.Max(intervalMinutes, 15);
     }
 
     private static void ValidateScheduleTime(

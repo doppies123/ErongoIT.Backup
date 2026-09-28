@@ -510,6 +510,9 @@ public sealed class Worker : BackgroundService
                 "Backup job {BackupJobId} is now Running.",
                 job.Id);
 
+            var sourceFolderName =
+                new DirectoryInfo(_options.SourcePath).Name;
+
             var files =
                 Directory.EnumerateFiles(
                     _options.SourcePath,
@@ -519,9 +522,13 @@ public sealed class Worker : BackgroundService
                 .Where(info => info.Exists)
                 .Select(info => (
                     FullPath: info.FullName,
-                    RelativePath: Path.GetRelativePath(
-                        _options.SourcePath,
-                        info.FullName),
+                    // Same layout as the Agent GUI: "<FolderName>\<relative path>",
+                    // so backups from both look identical when restoring.
+                    RelativePath: Path.Combine(
+                        sourceFolderName,
+                        Path.GetRelativePath(
+                            _options.SourcePath,
+                            info.FullName)),
                     Length: info.Length))
                 .ToList();
 
