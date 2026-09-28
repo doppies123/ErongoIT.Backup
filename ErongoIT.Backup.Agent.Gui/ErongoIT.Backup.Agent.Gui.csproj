@@ -13,4 +13,10 @@
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Per-target GUI settings. Copied next to the exe so LoadOptions finds them. -->
+    <None Update="agentgui.local.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="agentgui.vps.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

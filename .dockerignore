@@ -18,3 +18,9 @@ appsettings.*.Local.json
 backup-content/
 backup-storage/
 content-storage/
+*.tar
+*.sql
+*.before-*
+*.backup
+*.broken
+.password-reset/

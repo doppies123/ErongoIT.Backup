@@ -137,8 +137,17 @@ public sealed class BackupSnapshotService : IBackupSnapshotService
                     content.Sha256,
                     cancellationToken))
             {
-                throw new InvalidOperationException(
-                    "Backup content exists in the database but the physical content is missing.");
+                // Self-heal: the database knows this content but the
+                // physical file is missing (e.g. storage was lost or the
+                // database was migrated without the storage folder).
+                // We already have the full uploaded bytes and their hash
+                // matches, so write the content back to storage.
+                temporaryStream.Position = 0;
+
+                await _contentStorage.StoreAsync(
+                    temporaryStream,
+                    content.Sha256,
+                    cancellationToken);
             }
         }
 

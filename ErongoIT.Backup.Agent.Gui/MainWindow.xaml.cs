@@ -60,6 +60,34 @@ public partial class MainWindow : Window
     {
         var options = new GuiOptions();
 
+        var apiBaseUrlOverride =
+            GetCommandLineValue("--api-base-url");
+
+        // Profile selection:
+        //   --profile vps / --profile local  (explicit), or
+        //   --api-base-url <non-localhost>  (implies vps)
+        var profile =
+            GetCommandLineValue("--profile");
+
+        if (string.IsNullOrWhiteSpace(profile))
+        {
+            profile =
+                !string.IsNullOrWhiteSpace(apiBaseUrlOverride) &&
+                !apiBaseUrlOverride.Contains(
+                    "localhost",
+                    StringComparison.OrdinalIgnoreCase) &&
+                !apiBaseUrlOverride.Contains(
+                    "127.0.0.1",
+                    StringComparison.Ordinal)
+                    ? "vps"
+                    : "local";
+        }
+
+        profile = profile.Trim().ToLowerInvariant();
+
+        // Later files override earlier ones.
+        // agentgui.*.json use their own names so they never clash with
+        // the appsettings files copied in from the referenced Agent project.
         var paths = new[]
         {
             Path.Combine(
@@ -68,7 +96,11 @@ public partial class MainWindow : Window
 
             Path.Combine(
                 AppContext.BaseDirectory,
-                "appsettings.Development.json")
+                "appsettings.Development.json"),
+
+            Path.Combine(
+                AppContext.BaseDirectory,
+                $"agentgui.{profile}.json")
         };
 
         foreach (var path in paths)
@@ -89,43 +121,37 @@ public partial class MainWindow : Window
                     continue;
                 }
 
-                if (agent.TryGetProperty(
-                        "ApiBaseUrl",
-                        out var apiBaseUrl))
+                if (TryGetString(agent, "ApiBaseUrl", out var apiBaseUrl))
+                    options.ApiBaseUrl = apiBaseUrl;
+
+                // Accept both GUI names (Username/Password) and the
+                // background Agent names (ApiUsername/ApiPassword).
+                if (TryGetString(agent, "Username", out var username) ||
+                    TryGetString(agent, "ApiUsername", out username))
                 {
-                    options.ApiBaseUrl =
-                        apiBaseUrl.GetString()
-                        ?? options.ApiBaseUrl;
+                    options.Username = username;
                 }
 
-                if (agent.TryGetProperty(
-                        "CustomerId",
-                        out var customerId) &&
-                    Guid.TryParse(
-                        customerId.GetString(),
-                        out var parsedCustomerId))
+                if (TryGetString(agent, "Password", out var password) ||
+                    TryGetString(agent, "ApiPassword", out password))
+                {
+                    options.Password = password;
+                }
+
+                if (TryGetString(agent, "CustomerId", out var customerId) &&
+                    Guid.TryParse(customerId, out var parsedCustomerId))
                 {
                     options.CustomerId = parsedCustomerId;
                 }
 
-                if (agent.TryGetProperty(
-                        "DeviceId",
-                        out var deviceId) &&
-                    Guid.TryParse(
-                        deviceId.GetString(),
-                        out var parsedDeviceId))
+                if (TryGetString(agent, "DeviceId", out var deviceId) &&
+                    Guid.TryParse(deviceId, out var parsedDeviceId))
                 {
                     options.DeviceId = parsedDeviceId;
                 }
 
-                if (agent.TryGetProperty(
-                        "SourcePath",
-                        out var sourcePath))
-                {
-                    options.SourcePath =
-                        sourcePath.GetString()
-                        ?? options.SourcePath;
-                }
+                if (TryGetString(agent, "SourcePath", out var sourcePath))
+                    options.SourcePath = sourcePath;
             }
             catch
             {
@@ -133,7 +159,57 @@ public partial class MainWindow : Window
             }
         }
 
+        if (!string.IsNullOrWhiteSpace(apiBaseUrlOverride))
+        {
+            options.ApiBaseUrl =
+                apiBaseUrlOverride.TrimEnd('/');
+        }
+
         return options;
+    }
+
+    private static bool TryGetString(
+        JsonElement element,
+        string propertyName,
+        out string value)
+    {
+        value = string.Empty;
+
+        if (!element.TryGetProperty(propertyName, out var property) ||
+            property.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        var text = property.GetString();
+
+        if (string.IsNullOrWhiteSpace(text))
+            return false;
+
+        value = text.Trim();
+        return true;
+    }
+
+    private static string? GetCommandLineValue(
+        string argumentName)
+    {
+        var arguments =
+            Environment.GetCommandLineArgs();
+
+        for (var index = 0;
+             index < arguments.Length - 1;
+             index++)
+        {
+            if (string.Equals(
+                    arguments[index],
+                    argumentName,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return arguments[index + 1];
+            }
+        }
+
+        return null;
     }
 
     private async Task LoadDataAsync()
@@ -141,6 +217,14 @@ public partial class MainWindow : Window
         try
         {
             SetConnected(false, "Connecting...");
+
+            SetConnected(false, "Authenticating...");
+
+            await _api.LoginAsync(
+                _options.Username,
+                _options.Password);
+
+            SetConnected(false, "Loading device...");
 
             _device = await _api.GetDeviceAsync(
                 _options.DeviceId);

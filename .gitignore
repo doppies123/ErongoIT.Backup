@@ -84,3 +84,12 @@ desktop.ini
 
 # Accidental Windows-path filenames created under the repository
 C:UsersRaymondsourcereposErongoIT.Backup*
+
+# Agent GUI per-target settings (contain credentials)
+ErongoIT.Backup.Agent.Gui/agentgui.*.json
+
+# Deploy script temp folders
+publish-api/
+deploy-parts/
+upload-parts/
+api-app.tar.gz
