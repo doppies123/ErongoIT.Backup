@@ -1,4 +1,5 @@
 using ErongoIT.Backup.Application.Contracts;
+using ErongoIT.Backup.Application.Maintenance;
 using ErongoIT.Backup.Application.Persistence;
 using ErongoIT.Backup.Application.Security;
 using ErongoIT.Backup.Infrastructure.Data.Repositories;
@@ -34,6 +35,8 @@ public static class BackupDatabaseExtensions
         services.AddScoped<IUserRepository, UserRepository>();
 
         services.AddSingleton<IPasswordService, PasswordService>();
+
+        services.AddScoped<IRetentionService, ErongoIT.Backup.Infrastructure.Maintenance.RetentionService>();
 
         return services;
     }

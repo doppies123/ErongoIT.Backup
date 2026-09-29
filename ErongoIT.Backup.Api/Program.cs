@@ -56,6 +56,8 @@ builder.Services.AddScoped<IUserService, UserService>();
 
 builder.Services.AddSingleton<PasswordHasher<User>>();
 
+builder.Services.AddHostedService<ErongoIT.Backup.Api.Maintenance.RetentionBackgroundService>();
+
 builder.Services.AddAuthentication(
     JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
