@@ -544,6 +544,9 @@ public sealed class Worker : BackgroundService
 
             const int batchSize = 200;
 
+            // Reuse hashes of files whose size and modified time are unchanged.
+            var hashCache = FileHashCache.Load("agent");
+
             for (var index = 0; index < files.Count; index += batchSize)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -562,7 +565,7 @@ public sealed class Worker : BackgroundService
 
                     try
                     {
-                        var sha256 = await FileHashing.ComputeSha256Async(
+                        var sha256 = await hashCache.GetSha256Async(
                             file.FullPath,
                             cancellationToken);
 
@@ -645,6 +648,13 @@ public sealed class Worker : BackgroundService
 
             bytesSelected = Math.Max(bytesSelected, 0);
             bytesUploaded = Math.Min(bytesUploaded, bytesSelected);
+
+            hashCache.Save();
+
+            _logger.LogInformation(
+                "Hash cache: {Hits} file(s) unchanged since last scan (not re-read), {Misses} file(s) hashed.",
+                hashCache.Hits,
+                hashCache.Misses);
 
             _logger.LogInformation(
                 "Unchanged files skipped: {Skipped}. New/changed files uploaded: {Uploaded}.",

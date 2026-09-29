@@ -653,6 +653,10 @@ public partial class MainWindow : Window
         {
             const int batchSize = 200;
 
+            // Reuse hashes of files whose size and modified time are unchanged.
+            var hashCache =
+                ErongoIT.Backup.Agent.Backup.FileHashCache.Load("gui");
+
             for (var index = 0; index < files.Count; index += batchSize)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -679,10 +683,9 @@ public partial class MainWindow : Window
                     try
                     {
                         var sha256 = await Task.Run(
-                            () => ErongoIT.Backup.Agent.Backup.FileHashing
-                                .ComputeSha256Async(
-                                    file.FullPath,
-                                    cancellationToken),
+                            () => hashCache.GetSha256Async(
+                                file.FullPath,
+                                cancellationToken),
                             cancellationToken);
 
                         requests.Add(
@@ -777,6 +780,8 @@ public partial class MainWindow : Window
 
             bytesSelected = Math.Max(bytesSelected, 0);
             bytesUploaded = Math.Min(bytesUploaded, bytesSelected);
+
+            hashCache.Save();
 
             await _api.CompleteBackupJobAsync(
                 job.Id,
