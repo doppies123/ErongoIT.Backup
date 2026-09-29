@@ -481,6 +481,14 @@ public sealed class BackupSnapshotService : IBackupSnapshotService
         string destinationPath,
         CancellationToken cancellationToken = default)
     {
+        // Server-side restore writes files on the SERVER's disk at a path
+        // chosen by the caller. That is wrong for a remote API and unsafe,
+        // so it is disabled. Clients download each file via
+        // GET api/backup-snapshots/{jobId}/files/{fileId} instead.
+        throw new InvalidOperationException(
+            "Server-side restore is disabled. Update the Agent GUI: it downloads files and restores them locally.");
+
+#pragma warning disable CS0162 // Unreachable code kept for reference.
         if (backupJobId == Guid.Empty)
             throw new ArgumentException(
                 "Backup job ID is required.",
@@ -603,6 +611,7 @@ public sealed class BackupSnapshotService : IBackupSnapshotService
             destinationRoot,
             filesRestored,
             bytesRestored);
+#pragma warning restore CS0162
     }
 
     private static string ValidateRelativePath(

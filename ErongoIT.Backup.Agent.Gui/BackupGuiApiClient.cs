@@ -157,6 +157,92 @@ public sealed class BackupGuiApiClient
             ?? Array.Empty<BackupFileDto>();
     }
 
+    /// <summary>
+    /// Downloads one backed-up file from the server and writes it to a
+    /// local path. Written to a temporary file first, then moved into
+    /// place, so an interrupted restore never leaves a half-written file.
+    /// </summary>
+    public async Task<long> DownloadFileAsync(
+        Guid backupJobId,
+        Guid backupFileId,
+        string destinationFilePath,
+        IProgress<long>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        using var response =
+            await _httpClient.GetAsync(
+                $"api/backup-snapshots/{backupJobId}/files/{backupFileId}",
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken);
+
+        await EnsureSuccessAsync(
+            response,
+            cancellationToken);
+
+        var directory =
+            Path.GetDirectoryName(destinationFilePath);
+
+        if (!string.IsNullOrWhiteSpace(directory))
+            Directory.CreateDirectory(directory);
+
+        var temporaryPath =
+            destinationFilePath + ".erongoit-restore.tmp";
+
+        long written = 0;
+
+        try
+        {
+            await using (var source =
+                await response.Content.ReadAsStreamAsync(
+                    cancellationToken))
+            await using (var target = new FileStream(
+                temporaryPath,
+                FileMode.Create,
+                FileAccess.Write,
+                FileShare.None,
+                bufferSize: 1024 * 1024,
+                useAsync: true))
+            {
+                var buffer = new byte[1024 * 1024];
+                int read;
+                var lastReport = DateTime.MinValue;
+
+                while ((read = await source.ReadAsync(
+                           buffer.AsMemory(0, buffer.Length),
+                           cancellationToken)) > 0)
+                {
+                    await target.WriteAsync(
+                        buffer.AsMemory(0, read),
+                        cancellationToken);
+
+                    written += read;
+
+                    if ((DateTime.UtcNow - lastReport).TotalMilliseconds >= 250)
+                    {
+                        lastReport = DateTime.UtcNow;
+                        progress?.Report(written);
+                    }
+                }
+
+                await target.FlushAsync(cancellationToken);
+            }
+
+            File.Move(
+                temporaryPath,
+                destinationFilePath,
+                overwrite: true);
+
+            progress?.Report(written);
+
+            return written;
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath))
+                File.Delete(temporaryPath);
+        }
+    }
+
     public async Task<BackupRestoreResultDto>
         RestoreBackupAsync(
             Guid backupJobId,

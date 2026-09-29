@@ -1273,16 +1273,73 @@ public partial class MainWindow : Window
             RestoreStatusText.Text =
                 "Restoring files...";
 
-            var fileIds =
-                _restoreFiles
-                    .Select(x => x.Id)
-                    .ToList();
+            // Download every file from the server and write it on THIS
+            // computer. (The old server-side restore wrote files on the
+            // server, which is wrong once the API runs on the VPS.)
+            var destinationRoot =
+                Path.GetFullPath(destination);
+
+            Directory.CreateDirectory(destinationRoot);
+
+            var rootWithSeparator =
+                destinationRoot.EndsWith(Path.DirectorySeparatorChar)
+                    ? destinationRoot
+                    : destinationRoot + Path.DirectorySeparatorChar;
+
+            var filesRestored = 0;
+            long bytesRestored = 0;
+            var total = _restoreFiles.Count;
+
+            foreach (var file in _restoreFiles.ToList())
+            {
+                var relative =
+                    file.RelativePath
+                        .Replace('/', Path.DirectorySeparatorChar)
+                        .Replace('\\', Path.DirectorySeparatorChar)
+                        .TrimStart(Path.DirectorySeparatorChar);
+
+                var targetPath =
+                    Path.GetFullPath(
+                        Path.Combine(destinationRoot, relative));
+
+                if (!targetPath.StartsWith(
+                        rootWithSeparator,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException(
+                        $"Refusing to restore outside the destination: {file.RelativePath}");
+                }
+
+                var index = filesRestored + 1;
+                var displayPath = file.RelativePath;
+
+                RestoreStatusText.Text =
+                    $"Restoring {index:N0} of {total:N0}: {displayPath}";
+
+                var progress = new Progress<long>(bytes =>
+                {
+                    RestoreStatusText.Text =
+                        $"Restoring {index:N0} of {total:N0}: {displayPath} • " +
+                        $"{FormatBytes(bytes)}";
+                });
+
+                var written =
+                    await _api.DownloadFileAsync(
+                        row.Job.Id,
+                        file.Id,
+                        targetPath,
+                        progress);
+
+                filesRestored++;
+                bytesRestored += written;
+            }
 
             var result =
-                await _api.RestoreBackupAsync(
+                new BackupRestoreResultDto(
                     row.Job.Id,
-                    fileIds,
-                    destination);
+                    destinationRoot,
+                    filesRestored,
+                    bytesRestored);
 
             RestoreStatusText.Text =
                 $"Restore complete. {result.FilesRestored:N0} files restored. " +
@@ -1294,7 +1351,9 @@ public partial class MainWindow : Window
                 $"{Environment.NewLine}{Environment.NewLine}" +
                 $"Files restored: {result.FilesRestored:N0}" +
                 $"{Environment.NewLine}" +
-                $"Data restored: {FormatBytes(result.BytesRestored)}",
+                $"Data restored: {FormatBytes(result.BytesRestored)}" +
+                $"{Environment.NewLine}" +
+                $"Location: {destinationRoot}",
                 "Restore Complete",
                 MessageBoxButton.OK,
                 MessageBoxImage.Information);
