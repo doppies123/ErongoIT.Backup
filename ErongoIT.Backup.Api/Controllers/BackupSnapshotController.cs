@@ -26,7 +26,8 @@ public sealed class BackupSnapshotController : ControllerBase
         [FromQuery] Guid deviceId,
         [FromQuery] string relativePath,
         IFormFile file,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        [FromQuery] string? encoding = null)
     {
         if (file is null)
         {
@@ -44,7 +45,26 @@ public sealed class BackupSnapshotController : ControllerBase
             });
         }
 
-        await using var stream = file.OpenReadStream();
+        if (!string.IsNullOrWhiteSpace(encoding) &&
+            !string.Equals(encoding, "gzip", StringComparison.OrdinalIgnoreCase))
+        {
+            return BadRequest(new
+            {
+                error = $"Unsupported encoding '{encoding}'."
+            });
+        }
+
+        await using var rawStream = file.OpenReadStream();
+
+        // Compressed uploads are decompressed on the fly: the service hashes
+        // and stores the original bytes, so de-duplication and restore are
+        // unaffected by how the file travelled.
+        await using Stream stream =
+            string.Equals(encoding, "gzip", StringComparison.OrdinalIgnoreCase)
+                ? new System.IO.Compression.GZipStream(
+                    rawStream,
+                    System.IO.Compression.CompressionMode.Decompress)
+                : rawStream;
 
         try
         {
@@ -70,6 +90,13 @@ public sealed class BackupSnapshotController : ControllerBase
             return BadRequest(new
             {
                 error = ex.Message
+            });
+        }
+        catch (InvalidDataException ex)
+        {
+            return BadRequest(new
+            {
+                error = $"Compressed upload is corrupt: {ex.Message}"
             });
         }
     }

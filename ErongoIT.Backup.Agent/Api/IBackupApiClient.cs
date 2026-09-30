@@ -43,7 +43,8 @@ public interface IBackupApiClient
         string relativePath,
         Stream content,
         string fileName,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        string? encoding = null);
 
     Task<ErongoIT.Backup.Agent.Backup.RegisterExistingFilesResponse> RegisterExistingFilesAsync(
         Guid backupJobId,

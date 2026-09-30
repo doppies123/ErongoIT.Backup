@@ -164,7 +164,8 @@ public sealed class BackupApiClient : IBackupApiClient
         string relativePath,
         Stream content,
         string fileName,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? encoding = null)
     {
         if (content is null)
             throw new ArgumentNullException(nameof(content));
@@ -181,7 +182,10 @@ public sealed class BackupApiClient : IBackupApiClient
             $"api/backup-snapshots/{backupJobId}/files" +
             $"?customerId={Uri.EscapeDataString(customerId.ToString())}" +
             $"&deviceId={Uri.EscapeDataString(deviceId.ToString())}" +
-            $"&relativePath={Uri.EscapeDataString(relativePath)}";
+            $"&relativePath={Uri.EscapeDataString(relativePath)}" +
+            (string.IsNullOrWhiteSpace(encoding)
+                ? string.Empty
+                : $"&encoding={Uri.EscapeDataString(encoding)}");
 
         var response = await SendAsync(
             HttpMethod.Post,

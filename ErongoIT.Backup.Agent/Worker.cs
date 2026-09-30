@@ -539,6 +539,7 @@ public sealed class Worker : BackgroundService
             long bytesSelected = files.Sum(x => x.Length);
             long bytesProcessed = 0;
             long bytesUploaded = 0;
+            long bytesTransferred = 0;
             var filesUploaded = 0;
             var filesSkipped = 0;
 
@@ -613,17 +614,35 @@ public sealed class Worker : BackgroundService
                         file.RelativePath,
                         file.Length);
 
-                    await using var stream =
-                        FileHashing.OpenForUpload(file.FullPath);
+                    await using var prepared =
+                        await UploadCompression.PrepareAsync(
+                            file.FullPath,
+                            cancellationToken);
 
-                    await _api.UploadFileAsync(
-                        job.Id,
-                        _options.CustomerId,
-                        _options.DeviceId,
-                        file.RelativePath,
-                        stream,
-                        Path.GetFileName(file.FullPath),
-                        cancellationToken);
+                    await using (var stream =
+                        FileHashing.OpenForUpload(prepared.UploadPath))
+                    {
+                        await _api.UploadFileAsync(
+                            job.Id,
+                            _options.CustomerId,
+                            _options.DeviceId,
+                            file.RelativePath,
+                            stream,
+                            Path.GetFileName(file.FullPath),
+                            cancellationToken,
+                            prepared.Encoding);
+                    }
+
+                    bytesTransferred += prepared.UploadLength;
+
+                    if (prepared.IsCompressed)
+                    {
+                        _logger.LogInformation(
+                            "Compressed {RelativePath}: {Original} -> {Sent} bytes.",
+                            file.RelativePath,
+                            prepared.OriginalLength,
+                            prepared.UploadLength);
+                    }
 
                     bytesUploaded += file.Length;
                     bytesProcessed += file.Length;
@@ -650,6 +669,11 @@ public sealed class Worker : BackgroundService
             bytesUploaded = Math.Min(bytesUploaded, bytesSelected);
 
             hashCache.Save();
+
+            _logger.LogInformation(
+                "Transfer: {Uploaded} bytes of new/changed data sent as {Transferred} bytes.",
+                bytesUploaded,
+                bytesTransferred);
 
             _logger.LogInformation(
                 "Hash cache: {Hits} file(s) unchanged since last scan (not re-read), {Misses} file(s) hashed.",

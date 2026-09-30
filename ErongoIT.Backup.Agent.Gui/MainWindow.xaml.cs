@@ -608,6 +608,7 @@ public partial class MainWindow : Window
 
         long bytesProcessed = 0;
         long bytesUploaded = 0;
+        long bytesTransferred = 0;
         var filesUploaded = 0;
         var filesSkipped = 0;
         var filesChecked = 0;
@@ -749,13 +750,35 @@ public partial class MainWindow : Window
 
                     ShowProgress(
                         0,
-                        $"Uploading {relativePath}");
+                        $"Preparing {relativePath}");
+
+                    await using var prepared =
+                        await Task.Run(
+                            () => ErongoIT.Backup.Agent.Backup.UploadCompression
+                                .PrepareAsync(
+                                    file.FullPath,
+                                    cancellationToken),
+                            cancellationToken);
+
+                    // Progress is reported in original-file bytes, even when
+                    // a smaller compressed copy is what travels.
+                    var scale =
+                        prepared.UploadLength > 0
+                            ? (double)fileLength / prepared.UploadLength
+                            : 1.0;
+
+                    ShowProgress(
+                        0,
+                        prepared.IsCompressed
+                            ? $"Uploading {relativePath} (compressed to {FormatBytes(prepared.UploadLength)})"
+                            : $"Uploading {relativePath}");
 
                     await using (var stream =
                         new ErongoIT.Backup.Agent.Backup.ProgressReadStream(
                             ErongoIT.Backup.Agent.Backup.FileHashing
-                                .OpenForUpload(file.FullPath),
-                            sent => ((IProgress<long>)progress).Report(sent)))
+                                .OpenForUpload(prepared.UploadPath),
+                            sent => ((IProgress<long>)progress).Report(
+                                (long)(sent * scale))))
                     {
                         await _api.UploadFileAsync(
                             job.Id,
@@ -764,9 +787,11 @@ public partial class MainWindow : Window
                             relativePath,
                             stream,
                             Path.GetFileName(file.FullPath),
-                            cancellationToken);
+                            cancellationToken,
+                            prepared.Encoding);
                     }
 
+                    bytesTransferred += prepared.UploadLength;
                     bytesUploaded += fileLength;
                     bytesProcessed += fileLength;
                     filesUploaded++;
@@ -793,7 +818,8 @@ public partial class MainWindow : Window
             BackupProgressPercent.Text = "100%";
 
             BackupProgressText.Text =
-                $"{filesUploaded:N0} uploaded ({FormatBytes(bytesUploaded)}) • " +
+                $"{filesUploaded:N0} uploaded ({FormatBytes(bytesUploaded)}, " +
+                $"sent {FormatBytes(bytesTransferred)}) • " +
                 $"{filesSkipped:N0} unchanged";
 
             CurrentJobStatus.Text = "Completed";
