@@ -44,9 +44,10 @@ public sealed class FileHashCache
 
     public static FileHashCache Load(
         string name,
-        TimeSpan? maxAge = null)
+        TimeSpan? maxAge = null,
+        string? directory = null)
     {
-        var directory = Path.Combine(
+        directory ??= Path.Combine(
             Environment.GetFolderPath(
                 Environment.SpecialFolder.LocalApplicationData),
             "ErongoIT.Backup");

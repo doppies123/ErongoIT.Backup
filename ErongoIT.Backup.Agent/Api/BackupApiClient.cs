@@ -409,28 +409,48 @@ public sealed class BackupApiClient : IBackupApiClient
                 return _accessToken;
             }
 
-            if (string.IsNullOrWhiteSpace(_options.ApiUsername))
-            {
-                throw new InvalidOperationException(
-                    "Agent:ApiUsername is required for API authentication.");
-            }
+            HttpResponseMessage response;
 
-            _logger.LogInformation("API auth username={Username}, password length={Length}.", _options.ApiUsername, _options.ApiPassword.Length);
-            if (string.IsNullOrWhiteSpace(_options.ApiPassword))
+            if (_options.UsesDeviceKey)
             {
-                throw new InvalidOperationException(
-                    "Agent:ApiPassword is required for API authentication.");
-            }
+                // Enrolled PC: log in with the device's own key.
+                response = await _httpClient.PostAsJsonAsync(
+                    "api/auth/device",
+                    new
+                    {
+                        deviceId = _options.DeviceId,
+                        deviceKey = _options.DeviceKey
+                    },
+                    JsonOptions,
+                    cancellationToken);
 
-            var response = await _httpClient.PostAsJsonAsync(
-                "api/auth/login",
-                new
+                if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
                 {
-                    username = _options.ApiUsername,
-                    password = _options.ApiPassword
-                },
-                JsonOptions,
-                cancellationToken);
+                    throw new InvalidOperationException(
+                        "The server rejected this device's key. The device may have been " +
+                        "disabled or its key revoked. Re-enroll this PC.");
+                }
+            }
+            else
+            {
+                // Developer fallback: admin username/password.
+                if (string.IsNullOrWhiteSpace(_options.ApiUsername) ||
+                    string.IsNullOrWhiteSpace(_options.ApiPassword))
+                {
+                    throw new InvalidOperationException(
+                        "This PC is not enrolled and no API username/password is configured.");
+                }
+
+                response = await _httpClient.PostAsJsonAsync(
+                    "api/auth/login",
+                    new
+                    {
+                        username = _options.ApiUsername,
+                        password = _options.ApiPassword
+                    },
+                    JsonOptions,
+                    cancellationToken);
+            }
 
             if (!response.IsSuccessStatusCode)
             {
@@ -460,8 +480,10 @@ public sealed class BackupApiClient : IBackupApiClient
                 DateTimeOffset.UtcNow.AddHours(8).AddMinutes(-5);
 
             _logger.LogInformation(
-                "Successfully authenticated with the backup API as {Username}.",
-                _options.ApiUsername);
+                "Authenticated with the backup API as {Identity}.",
+                _options.UsesDeviceKey
+                    ? $"device {_options.DeviceId}"
+                    : _options.ApiUsername);
 
             return _accessToken;
         }

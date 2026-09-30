@@ -45,8 +45,12 @@ public sealed class Worker : BackgroundService
             _options.BackupPlanId);
 
         _logger.LogInformation(
-            "SourcePath: {SourcePath}",
-            _options.SourcePath);
+            "Folders: {Folders}",
+            string.Join("; ", _options.GetSourceFolders()));
+
+        _logger.LogInformation(
+            "Authentication: {Mode}",
+            _options.UsesDeviceKey ? "device key (enrolled)" : "admin login (developer)");
 
         _logger.LogInformation(
             "============================================================");
@@ -469,19 +473,26 @@ public sealed class Worker : BackgroundService
             GetScheduleTypeName(
                 plan.ScheduleType));
 
-        _logger.LogInformation(
-            "Source path: {SourcePath}",
-            _options.SourcePath);
+        var sourceFolders = _options.GetSourceFolders();
 
-        if (!Directory.Exists(
-                _options.SourcePath))
+        foreach (var folder in sourceFolders)
         {
-            throw new DirectoryNotFoundException(
-                $"Backup source directory does not exist: {_options.SourcePath}");
+            _logger.LogInformation(
+                "Folder: {Folder} ({State})",
+                folder,
+                Directory.Exists(folder) ? "found" : "MISSING - skipped");
         }
 
-        _logger.LogInformation(
-            "Source directory exists.");
+        var existingFolders = sourceFolders
+            .Where(Directory.Exists)
+            .ToList();
+
+        if (existingFolders.Count == 0)
+        {
+            throw new DirectoryNotFoundException(
+                "None of the folders to back up exist: " +
+                string.Join("; ", sourceFolders));
+        }
 
         BackupJobDto? job = null;
 
@@ -510,27 +521,62 @@ public sealed class Worker : BackgroundService
                 "Backup job {BackupJobId} is now Running.",
                 job.Id);
 
-            var sourceFolderName =
-                new DirectoryInfo(_options.SourcePath).Name;
+            // Each folder is stored as "<FolderName>\<relative path>"
+            // (same layout as the Agent GUI). Two folders with the same
+            // name get a numeric suffix so their files never collide.
+            var files = new List<(string FullPath, string RelativePath, long Length)>();
+            var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-            var files =
-                Directory.EnumerateFiles(
-                    _options.SourcePath,
-                    "*",
-                    SearchOption.AllDirectories)
-                .Select(path => new FileInfo(path))
-                .Where(info => info.Exists)
-                .Select(info => (
-                    FullPath: info.FullName,
-                    // Same layout as the Agent GUI: "<FolderName>\<relative path>",
-                    // so backups from both look identical when restoring.
-                    RelativePath: Path.Combine(
-                        sourceFolderName,
-                        Path.GetRelativePath(
-                            _options.SourcePath,
-                            info.FullName)),
-                    Length: info.Length))
-                .ToList();
+            foreach (var folder in existingFolders)
+            {
+                var baseName = new DirectoryInfo(folder).Name;
+
+                if (string.IsNullOrWhiteSpace(baseName) || baseName.EndsWith(':'))
+                    baseName = folder.Replace(":", string.Empty).Trim('\\', '/');
+
+                var folderName = baseName;
+                var suffix = 2;
+
+                while (!usedNames.Add(folderName))
+                    folderName = $"{baseName}_{suffix++}";
+
+                IEnumerable<string> paths;
+
+                try
+                {
+                    paths = Directory.EnumerateFiles(
+                        folder,
+                        "*",
+                        new EnumerationOptions
+                        {
+                            RecurseSubdirectories = true,
+                            IgnoreInaccessible = true,
+                            AttributesToSkip = FileAttributes.ReparsePoint
+                        });
+
+                    foreach (var path in paths)
+                    {
+                        var info = new FileInfo(path);
+
+                        if (!info.Exists)
+                            continue;
+
+                        files.Add((
+                            info.FullName,
+                            Path.Combine(
+                                folderName,
+                                Path.GetRelativePath(folder, info.FullName)),
+                            info.Length));
+                    }
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    _logger.LogWarning(
+                        "Could not fully scan {Folder}: {Message}",
+                        folder,
+                        ex.Message);
+                }
+            }
 
             _logger.LogInformation(
                 "Found {FileCount} file(s) in source.",
@@ -546,7 +592,9 @@ public sealed class Worker : BackgroundService
             const int batchSize = 200;
 
             // Reuse hashes of files whose size and modified time are unchanged.
-            var hashCache = FileHashCache.Load("agent");
+            var hashCache = FileHashCache.Load(
+                "agent",
+                directory: AgentConfigFile.DataDirectory);
 
             for (var index = 0; index < files.Count; index += batchSize)
             {
