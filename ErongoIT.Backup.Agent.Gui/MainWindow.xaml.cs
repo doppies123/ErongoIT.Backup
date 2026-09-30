@@ -35,23 +35,30 @@ public partial class MainWindow : Window
 
         FolderList.ItemsSource = _folders;
 
+        var sourceFolders = _options.GetSourceFolders();
+
         SourcePathText.Text =
-            string.IsNullOrWhiteSpace(_options.SourcePath)
+            sourceFolders.Count == 0
                 ? "Not configured"
-                : _options.SourcePath;
+                : string.Join(Environment.NewLine, sourceFolders);
 
         SettingsApiUrl.Text = _options.ApiBaseUrl;
         SettingsCustomerId.Text = _options.CustomerId.ToString();
         SettingsDeviceId.Text = _options.DeviceId.ToString();
-        FooterVersion.Text = "Agent 1.0.0";
+        SettingsModeText.Text = _options.IsEnrolled
+            ? "Registered PC (device key in C:\\ProgramData\\ErongoIT Backup\\agent.json)"
+            : "Developer profile (admin login)";
+        FooterVersion.Text = "Agent 1.1.0";
 
-        if (!string.IsNullOrWhiteSpace(_options.SourcePath) &&
-            Directory.Exists(_options.SourcePath))
+        foreach (var folder in sourceFolders)
         {
-            _folders.Add(_options.SourcePath);
+            if (Directory.Exists(folder))
+                _folders.Add(folder);
         }
 
         UpdateFolderCount();
+
+        InitializeTray();
 
         _ = LoadDataAsync();
     }
@@ -66,8 +73,10 @@ public partial class MainWindow : Window
         // Profile selection:
         //   --profile vps / --profile local  (explicit), or
         //   --api-base-url <non-localhost>  (implies vps)
-        var profile =
+        var explicitProfile =
             GetCommandLineValue("--profile");
+
+        var profile = explicitProfile;
 
         if (string.IsNullOrWhiteSpace(profile))
         {
@@ -159,6 +168,40 @@ public partial class MainWindow : Window
             }
         }
 
+        // A registered PC (agent.json from setup) always uses its own
+        // server, device and key. Only an explicit "--profile local"
+        // (developer testing against the local API) bypasses it.
+        if (!string.Equals(explicitProfile?.Trim(), "local", StringComparison.OrdinalIgnoreCase))
+        {
+            var enrolled =
+                ErongoIT.Backup.Agent.Configuration.AgentConfigFile.TryLoad();
+
+            if (enrolled is not null)
+            {
+                try
+                {
+                    options.DeviceKey = enrolled.GetDeviceKey();
+                }
+                catch
+                {
+                    options.DeviceKey = string.Empty;
+                }
+
+                if (options.IsEnrolled)
+                {
+                    options.ApiBaseUrl = enrolled.ApiBaseUrl;
+                    options.CustomerId = enrolled.CustomerId;
+                    options.DeviceId = enrolled.DeviceId;
+                    options.SourcePaths = new List<string>(enrolled.SourcePaths);
+                    options.SourcePath = string.Empty;
+                    options.Username = string.Empty;
+                    options.Password = string.Empty;
+
+                    return options;
+                }
+            }
+        }
+
         if (!string.IsNullOrWhiteSpace(apiBaseUrlOverride))
         {
             options.ApiBaseUrl =
@@ -220,9 +263,18 @@ public partial class MainWindow : Window
 
             SetConnected(false, "Authenticating...");
 
-            await _api.LoginAsync(
-                _options.Username,
-                _options.Password);
+            if (_options.IsEnrolled)
+            {
+                await _api.DeviceLoginAsync(
+                    _options.DeviceId,
+                    _options.DeviceKey);
+            }
+            else
+            {
+                await _api.LoginAsync(
+                    _options.Username,
+                    _options.Password);
+            }
 
             SetConnected(false, "Loading device...");
 
@@ -840,6 +892,29 @@ public partial class MainWindow : Window
 
             CurrentJobStatus.Text = "Failed";
             throw;
+        }
+    }
+
+    private void ChangeSetup_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(
+                new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = Environment.ProcessPath!,
+                    Arguments = "--setup",
+                    UseShellExecute = true,
+                    Verb = "runas"
+                });
+
+            ExitApplication();
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            // User declined the administrator prompt.
         }
     }
 

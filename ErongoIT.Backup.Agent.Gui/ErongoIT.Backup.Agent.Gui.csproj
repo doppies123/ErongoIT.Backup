@@ -4,19 +4,38 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
+    <!-- Only for the system-tray icon (NotifyIcon). -->
+    <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>ErongoIT.Backup.Agent.Gui</AssemblyName>
+    <Version>1.1.0</Version>
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+    <!-- ErongoIT logo: exe, taskbar, desktop/Start-menu shortcuts. -->
+    <ApplicationIcon>app.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Keep WPF names (MessageBox, Application...) unambiguous. -->
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Window title-bar icon. -->
+    <Resource Include="app.ico" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\ErongoIT.Backup.Agent\ErongoIT.Backup.Agent.csproj" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.0" />
+    <PackageReference Include="System.ServiceProcess.ServiceController" Version="10.0.0" />
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Per-target GUI settings. Copied next to the exe so LoadOptions finds them. -->
-    <None Update="agentgui.local.json" CopyToOutputDirectory="PreserveNewest" />
-    <None Update="agentgui.vps.json" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Developer-only GUI profiles. Copied for local runs, never published. -->
+    <None Update="agentgui.local.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Never" />
+    <None Update="agentgui.vps.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Never" />
   </ItemGroup>
 
 </Project>
