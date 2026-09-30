@@ -38,6 +38,13 @@ public sealed class DeviceConfiguration : IEntityTypeConfiguration<Device>
 
         builder.Property(x => x.AssignedBackupPlanId);
 
+        builder.Property(x => x.ApiKeyHash)
+            .HasMaxLength(64);
+
+        builder.Property(x => x.ApiKeyIssuedAtUtc);
+
+        builder.Ignore(x => x.HasApiKey);
+
         builder.HasOne<Customer>()
             .WithMany()
             .HasForeignKey(x => x.CustomerId)

@@ -49,6 +49,20 @@ public sealed class DeviceRepository : IDeviceRepository
         return query.AnyAsync(cancellationToken);
     }
 
+    public Task<Device?> GetByCustomerAndNameAsync(
+        Guid customerId,
+        string name,
+        CancellationToken cancellationToken = default)
+    {
+        var trimmed = name.Trim();
+
+        return _db.Devices
+            .FirstOrDefaultAsync(
+                x => x.CustomerId == customerId &&
+                     x.Name == trimmed,
+                cancellationToken);
+    }
+
     public async Task AddAsync(
         Device device,
         CancellationToken cancellationToken = default)

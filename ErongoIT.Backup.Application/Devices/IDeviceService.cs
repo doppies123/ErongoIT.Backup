@@ -38,6 +38,29 @@ public interface IDeviceService
         Guid deviceId,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Registers a PC for a customer (or re-enrols an existing device with
+    /// the same name) and issues a new secret API key. The plain key is
+    /// returned once and never stored.
+    /// </summary>
+    Task<DeviceEnrollmentResult> EnrollAsync(
+        Guid customerId,
+        string name,
+        string? hostname,
+        string? operatingSystem,
+        Guid? backupPlanId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Returns the device if the key is valid and the device is active.</summary>
+    Task<Device?> ValidateApiKeyAsync(
+        Guid deviceId,
+        string apiKey,
+        CancellationToken cancellationToken = default);
+
+    Task<bool> RevokeApiKeyAsync(
+        Guid deviceId,
+        CancellationToken cancellationToken = default);
+
     Task<bool> ActivateAsync(
         Guid id,
         CancellationToken cancellationToken = default);
@@ -46,3 +69,8 @@ public interface IDeviceService
         Guid id,
         CancellationToken cancellationToken = default);
 }
+
+public sealed record DeviceEnrollmentResult(
+    Device Device,
+    string ApiKey,
+    bool IsNewDevice);

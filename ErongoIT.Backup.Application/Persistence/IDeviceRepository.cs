@@ -18,6 +18,11 @@ public interface IDeviceRepository
         Guid? excludeDeviceId = null,
         CancellationToken cancellationToken = default);
 
+    Task<Device?> GetByCustomerAndNameAsync(
+        Guid customerId,
+        string name,
+        CancellationToken cancellationToken = default);
+
     Task AddAsync(
         Device device,
         CancellationToken cancellationToken = default);
