@@ -9,6 +9,9 @@ namespace ErongoIT.Backup.Agent.Backup;
 /// so stored content, SHA-256 de-duplication and restores are unchanged.
 /// Already-compressed formats are sent as-is, and a file is only sent
 /// compressed if that saves at least 10%.
+///
+/// Uses CompressionLevel.Fastest: roughly 3-5x less CPU than Optimal for
+/// only a few percent larger output, so the laptop stays responsive.
 /// </summary>
 public static class UploadCompression
 {
@@ -74,16 +77,16 @@ public static class UploadCompression
                 FileMode.CreateNew,
                 FileAccess.Write,
                 FileShare.None,
-                bufferSize: 1024 * 1024,
+                bufferSize: 256 * 1024,
                 useAsync: true))
             await using (var gzip = new GZipStream(
                 target,
-                CompressionLevel.Optimal,
+                CompressionLevel.Fastest,
                 leaveOpen: false))
             {
                 await source.CopyToAsync(
                     gzip,
-                    1024 * 1024,
+                    256 * 1024,
                     cancellationToken);
             }
 

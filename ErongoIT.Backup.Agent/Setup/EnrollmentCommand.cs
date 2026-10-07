@@ -7,7 +7,7 @@ namespace ErongoIT.Backup.Agent.Setup;
 ///
 ///   ErongoIT.Backup.Agent.exe --enroll
 ///       --server https://backup.erongoit.com
-///       --username admin --password "..."
+///       --username admin (--password "..." | --password-file file)
 ///       --customer "Erongo IT Consultants"   (name or ID)
 ///       [--name PC-NAME]                      (default: computer name)
 ///       [--plan "Daily Test"]                 (name or ID)
@@ -24,7 +24,8 @@ public static class EnrollmentCommand
         {
             var server = Get(args, "--server") ?? "https://backup.erongoit.com";
             var username = Get(args, "--username") ?? throw new ArgumentException("--username is required.");
-            var password = Get(args, "--password") ?? throw new ArgumentException("--password is required.");
+            var password = Get(args, "--password") ?? ReadPasswordFile(Get(args, "--password-file"))
+                           ?? throw new ArgumentException("--password or --password-file is required.");
             var customerArg = Get(args, "--customer") ?? throw new ArgumentException("--customer is required.");
             var deviceName = Get(args, "--name") ?? Environment.MachineName;
             var planArg = Get(args, "--plan");
@@ -87,6 +88,25 @@ public static class EnrollmentCommand
         {
             Console.Error.WriteLine($"ENROLLMENT FAILED: {ex.Message}");
             return 1;
+        }
+    }
+
+    /// <summary>
+    /// The installer writes the password to a private temp file (deleted
+    /// right after), so it never appears on a command line.
+    /// </summary>
+    private static string? ReadPasswordFile(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            return null;
+
+        try
+        {
+            return File.ReadAllText(path).TrimEnd('\r', '\n');
+        }
+        finally
+        {
+            try { File.Delete(path); } catch { }
         }
     }
 

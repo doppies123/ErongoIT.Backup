@@ -235,6 +235,9 @@ namespace ErongoIT.Backup.Infrastructure.Persistence.Migrations
                     b.Property<Guid?>("AssignedBackupPlanId")
                         .HasColumnType("uuid");
 
+                    b.Property<DateTime?>("BackupRequestedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<Guid>("CustomerId")
                         .HasColumnType("uuid");
 
@@ -269,6 +272,69 @@ namespace ErongoIT.Backup.Infrastructure.Persistence.Migrations
                         .IsUnique();
 
                     b.ToTable("devices", (string)null);
+                });
+
+            modelBuilder.Entity("ErongoIT.Backup.Domain.Entities.FileVersion", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("BackupContentId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("BackupJobId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("CustomerId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("DeviceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Folder")
+                        .IsRequired()
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
+                    b.Property<DateTime?>("LastWriteUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<string>("Path")
+                        .IsRequired()
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
+                    b.Property<long>("SizeBytes")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTime>("ValidFromUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("ValidToUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BackupContentId");
+
+                    b.HasIndex("BackupJobId");
+
+                    b.HasIndex("ValidToUtc");
+
+                    b.HasIndex("DeviceId", "Folder");
+
+                    b.HasIndex("DeviceId", "Path")
+                        .IsUnique()
+                        .HasFilter("\"ValidToUtc\" IS NULL");
+
+                    b.HasIndex("DeviceId", "Path", "ValidFromUtc");
+
+                    b.ToTable("backup_file_versions", (string)null);
                 });
 
             modelBuilder.Entity("ErongoIT.Backup.Domain.Entities.User", b =>
@@ -358,6 +424,26 @@ namespace ErongoIT.Backup.Infrastructure.Persistence.Migrations
                     b.HasOne("ErongoIT.Backup.Domain.Entities.Customer", null)
                         .WithMany()
                         .HasForeignKey("CustomerId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("ErongoIT.Backup.Domain.Entities.FileVersion", b =>
+                {
+                    b.HasOne("ErongoIT.Backup.Domain.Entities.BackupContent", null)
+                        .WithMany()
+                        .HasForeignKey("BackupContentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("ErongoIT.Backup.Domain.Entities.BackupJob", null)
+                        .WithMany()
+                        .HasForeignKey("BackupJobId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("ErongoIT.Backup.Domain.Entities.Device", null)
+                        .WithMany()
+                        .HasForeignKey("DeviceId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });

@@ -20,6 +20,13 @@ public partial class App : System.Windows.Application
 
         var args = e.Args;
 
+        // Elevated helper started by the GUI to save the folder list.
+        if (args.Any(a => string.Equals(a, FolderSettings.SaveFoldersArgument, StringComparison.OrdinalIgnoreCase)))
+        {
+            Shutdown(FolderSettings.RunElevatedSave(args));
+            return;
+        }
+
         var setupRequested = args.Any(a =>
             string.Equals(a, "--setup", StringComparison.OrdinalIgnoreCase));
 

@@ -5,7 +5,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UserSecretsId>dotnet-ErongoIT.Backup.Agent-0e71134e-b934-4b4e-96c4-efc8bc8b49d9</UserSecretsId>
-    <Version>1.1.0</Version>
+    <Version>1.2.0</Version>
     <!-- DPAPI and Windows Service APIs are only used on Windows. -->
     <NoWarn>$(NoWarn);CA1416</NoWarn>
   </PropertyGroup>

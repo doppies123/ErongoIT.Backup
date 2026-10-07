@@ -293,6 +293,94 @@ public sealed class BackupApiClient : IBackupApiClient
         }
     }
 
+    public async Task<IReadOnlyList<string>> CheckContentAsync(
+        Guid deviceId,
+        IReadOnlyList<ContentReferenceDto> contents,
+        CancellationToken cancellationToken = default)
+    {
+        var response = await SendJsonAsync(
+            HttpMethod.Post,
+            $"api/devices/{deviceId}/sync/check-content",
+            new { contents },
+            cancellationToken);
+
+        await EnsureSuccessAsync(response, cancellationToken);
+
+        var result = await response.Content.ReadFromJsonAsync<CheckContentResponse>(
+            JsonOptions,
+            cancellationToken);
+
+        return result?.Missing ?? Array.Empty<string>();
+    }
+
+    public async Task UploadContentAsync(
+        Guid deviceId,
+        string sha256,
+        Stream content,
+        string? encoding,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+
+        using var form = new MultipartFormDataContent();
+        using var streamContent = new StreamContent(content);
+
+        form.Add(streamContent, "file", sha256);
+
+        var url =
+            $"api/devices/{deviceId}/sync/content?sha256={Uri.EscapeDataString(sha256)}" +
+            (string.IsNullOrWhiteSpace(encoding)
+                ? string.Empty
+                : $"&encoding={Uri.EscapeDataString(encoding)}");
+
+        var response = await SendAsync(HttpMethod.Post, url, form, cancellationToken);
+
+        await EnsureSuccessAsync(response, cancellationToken);
+    }
+
+    public async Task<ApplyChangesResultDto> ApplyChangesAsync(
+        Guid deviceId,
+        Guid? backupJobId,
+        IReadOnlyList<FileChangeDto> changed,
+        IReadOnlyList<string> deleted,
+        CancellationToken cancellationToken = default)
+    {
+        var response = await SendJsonAsync(
+            HttpMethod.Post,
+            $"api/devices/{deviceId}/sync/changes",
+            new { backupJobId, changed, deleted },
+            cancellationToken);
+
+        await EnsureSuccessAsync(response, cancellationToken);
+
+        return await response.Content.ReadFromJsonAsync<ApplyChangesResultDto>(
+                   JsonOptions,
+                   cancellationToken)
+               ?? throw new InvalidOperationException(
+                   "The backup API returned an empty response when sending changes.");
+    }
+
+    public async Task<CurrentStatePageDto> GetSyncStateAsync(
+        Guid deviceId,
+        string? afterPath,
+        int take,
+        CancellationToken cancellationToken = default)
+    {
+        var url = $"api/devices/{deviceId}/sync/state?take={take}" +
+                  (string.IsNullOrEmpty(afterPath)
+                      ? string.Empty
+                      : $"&after={Uri.EscapeDataString(afterPath)}");
+
+        var response = await SendAsync(HttpMethod.Get, url, cancellationToken);
+
+        await EnsureSuccessAsync(response, cancellationToken);
+
+        return await response.Content.ReadFromJsonAsync<CurrentStatePageDto>(
+                   JsonOptions,
+                   cancellationToken)
+               ?? new CurrentStatePageDto(Array.Empty<CurrentFileDto>(), null);
+    }
+
     public async Task SendHeartbeatAsync(
         Guid deviceId,
         string? agentVersion,
@@ -511,6 +599,9 @@ public sealed class BackupApiClient : IBackupApiClient
             $"Backup API request failed with HTTP {(int)response.StatusCode} " +
             $"({response.StatusCode}) at {requestUrl}: {body}");
     }
+
+    private sealed record CheckContentResponse(
+        IReadOnlyList<string> Missing);
 
     private sealed record LoginResponse(
         string AccessToken,

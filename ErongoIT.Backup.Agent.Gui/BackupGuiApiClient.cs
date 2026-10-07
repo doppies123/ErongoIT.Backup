@@ -23,6 +23,53 @@ public sealed class BackupGuiApiClient
         };
     }
 
+    /// <summary>Login for an enrolled PC using its device key.</summary>
+    public async Task DeviceLoginAsync(
+        Guid deviceId,
+        string deviceKey,
+        CancellationToken cancellationToken = default)
+    {
+        var response =
+            await _httpClient.PostAsJsonAsync(
+                "api/auth/device",
+                new
+                {
+                    deviceId,
+                    deviceKey
+                },
+                JsonOptions,
+                cancellationToken);
+
+        if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+        {
+            throw new InvalidOperationException(
+                "The server rejected this PC's device key. It may have been disabled " +
+                "in the portal. Use Settings > Change setup to register it again.");
+        }
+
+        await EnsureSuccessAsync(
+            response,
+            cancellationToken);
+
+        var loginResponse =
+            await response.Content.ReadFromJsonAsync<
+                LoginResponse>(
+                JsonOptions,
+                cancellationToken);
+
+        if (loginResponse is null ||
+            string.IsNullOrWhiteSpace(loginResponse.AccessToken))
+        {
+            throw new InvalidOperationException(
+                "Backup API returned an invalid login response.");
+        }
+
+        _httpClient.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue(
+                loginResponse.TokenType,
+                loginResponse.AccessToken);
+    }
+
     public async Task LoginAsync(
         string username,
         string password,
@@ -478,6 +525,150 @@ public sealed class BackupGuiApiClient
             cancellationToken);
     }
 
+    // ------------------------------------------------------------
+    // Restore browser (file versions) and "Back up now"
+    // ------------------------------------------------------------
+
+    /// <summary>Asks the backup service to start a backup (within ~30 seconds).</summary>
+    public async Task RequestBackupAsync(
+        Guid deviceId,
+        CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsync(
+            $"api/devices/{deviceId}/backup-now",
+            content: null,
+            cancellationToken);
+
+        await EnsureSuccessAsync(response, cancellationToken);
+    }
+
+    public async Task<FolderListingDto> BrowseAsync(
+        Guid deviceId,
+        string folder,
+        DateTime? asOfUtc,
+        bool includeDeleted,
+        CancellationToken cancellationToken = default)
+    {
+        var url =
+            $"api/devices/{deviceId}/browse?folder={Uri.EscapeDataString(folder ?? string.Empty)}" +
+            $"&includeDeleted={(includeDeleted ? "true" : "false")}" +
+            AsOfQuery(asOfUtc);
+
+        var response = await _httpClient.GetAsync(url, cancellationToken);
+
+        await EnsureSuccessAsync(response, cancellationToken);
+
+        return await response.Content.ReadFromJsonAsync<FolderListingDto>(JsonOptions, cancellationToken)
+            ?? new FolderListingDto(folder ?? string.Empty, DateTime.UtcNow,
+                Array.Empty<FolderItemDto>(), Array.Empty<VersionItemDto>());
+    }
+
+    public async Task<IReadOnlyList<VersionItemDto>> ResolveAsync(
+        Guid deviceId,
+        IReadOnlyList<string> paths,
+        DateTime? asOfUtc,
+        bool includeDeleted,
+        CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.PostAsJsonAsync(
+            $"api/devices/{deviceId}/restore/resolve",
+            new
+            {
+                paths,
+                asOf = asOfUtc?.ToUniversalTime(),
+                includeDeleted
+            },
+            JsonOptions,
+            cancellationToken);
+
+        await EnsureSuccessAsync(response, cancellationToken);
+
+        return await response.Content.ReadFromJsonAsync<IReadOnlyList<VersionItemDto>>(JsonOptions, cancellationToken)
+            ?? Array.Empty<VersionItemDto>();
+    }
+
+    public async Task<IReadOnlyList<VersionItemDto>> SearchAsync(
+        Guid deviceId,
+        string query,
+        DateTime? asOfUtc,
+        bool includeDeleted,
+        CancellationToken cancellationToken = default)
+    {
+        var url =
+            $"api/devices/{deviceId}/search?q={Uri.EscapeDataString(query)}" +
+            $"&includeDeleted={(includeDeleted ? "true" : "false")}&take=1000" +
+            AsOfQuery(asOfUtc);
+
+        var response = await _httpClient.GetAsync(url, cancellationToken);
+
+        await EnsureSuccessAsync(response, cancellationToken);
+
+        return await response.Content.ReadFromJsonAsync<IReadOnlyList<VersionItemDto>>(JsonOptions, cancellationToken)
+            ?? Array.Empty<VersionItemDto>();
+    }
+
+    /// <summary>Downloads one file version to a local path (via a temporary file).</summary>
+    public async Task<long> DownloadVersionAsync(
+        Guid versionId,
+        string destinationFilePath,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await _httpClient.GetAsync(
+            $"api/file-versions/{versionId}/content",
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
+
+        await EnsureSuccessAsync(response, cancellationToken);
+
+        var directory = Path.GetDirectoryName(destinationFilePath);
+
+        if (!string.IsNullOrWhiteSpace(directory))
+            Directory.CreateDirectory(directory);
+
+        var temporaryPath = destinationFilePath + ".erongoit-restore.tmp";
+        long written = 0;
+
+        try
+        {
+            await using (var source = await response.Content.ReadAsStreamAsync(cancellationToken))
+            await using (var target = new FileStream(
+                temporaryPath,
+                FileMode.Create,
+                FileAccess.Write,
+                FileShare.None,
+                bufferSize: 1024 * 1024,
+                useAsync: true))
+            {
+                var buffer = new byte[1024 * 1024];
+                int read;
+
+                while ((read = await source.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken)) > 0)
+                {
+                    await target.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+                    written += read;
+                }
+
+                await target.FlushAsync(cancellationToken);
+            }
+
+            File.Move(temporaryPath, destinationFilePath, overwrite: true);
+
+            return written;
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath))
+                File.Delete(temporaryPath);
+        }
+    }
+
+    private static string AsOfQuery(DateTime? asOfUtc) =>
+        asOfUtc is null
+            ? string.Empty
+            : "&asOf=" + Uri.EscapeDataString(
+                asOfUtc.Value.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ",
+                    System.Globalization.CultureInfo.InvariantCulture));
+
     private static async Task EnsureSuccessAsync(
         HttpResponseMessage response,
         CancellationToken cancellationToken)
@@ -550,3 +741,27 @@ public sealed record BackupRestoreResultDto(
     string DestinationPath,
     int FilesRestored,
     long BytesRestored);
+
+public sealed record FolderItemDto(
+    string Name,
+    string Path,
+    int FileCount,
+    int FolderCount,
+    long SizeBytes,
+    DateTime? LastWriteUtc,
+    bool Deleted);
+
+public sealed record VersionItemDto(
+    Guid VersionId,
+    string Name,
+    string Path,
+    long SizeBytes,
+    DateTime? LastWriteUtc,
+    DateTime BackedUpUtc,
+    bool Deleted);
+
+public sealed record FolderListingDto(
+    string Folder,
+    DateTime AsOfUtc,
+    IReadOnlyList<FolderItemDto> Folders,
+    IReadOnlyList<VersionItemDto> Files);

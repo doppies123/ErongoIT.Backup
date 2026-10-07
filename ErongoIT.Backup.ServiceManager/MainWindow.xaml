@@ -130,7 +130,8 @@
                                            FontWeight="SemiBold"
                                            Margin="12,2,0,0"/>
                             </StackPanel>
-                            <TextBlock Text="Runs scheduled backups from this PC to the cloud server."
+                            <TextBlock x:Name="AgentModeText"
+                                       Text="Runs scheduled backups from this PC to the cloud server."
                                        Style="{StaticResource Muted}"/>
 
                             <Grid Margin="0,10,0,0">

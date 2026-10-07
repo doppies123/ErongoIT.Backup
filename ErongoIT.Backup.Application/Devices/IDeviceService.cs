@@ -24,6 +24,11 @@ public interface IDeviceService
         string name,
         CancellationToken cancellationToken = default);
 
+    /// <summary>"Back up now": the agent picks it up within ~30 seconds.</summary>
+    Task<bool> RequestBackupAsync(
+        Guid id,
+        CancellationToken cancellationToken = default);
+
     Task<bool> RecordHeartbeatAsync(
         Guid id,
         string? agentVersion = null,

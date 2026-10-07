@@ -23,6 +23,8 @@ public sealed class BackupDbContext : DbContext
 
     public DbSet<BackupContent> BackupContents => Set<BackupContent>();
 
+    public DbSet<FileVersion> FileVersions => Set<FileVersion>();
+
     public DbSet<User> Users => Set<User>();
 
     protected override void OnModelCreating(

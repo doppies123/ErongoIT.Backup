@@ -20,7 +20,7 @@ public sealed class AgentOptions
 
     public Guid BackupPlanId { get; set; }
 
-    public string AgentVersion { get; set; } = "1.1.0";
+    public string AgentVersion { get; set; } = "1.2.0";
 
     /// <summary>Single folder (older configuration).</summary>
     public string SourcePath { get; set; } = string.Empty;
@@ -33,6 +33,25 @@ public sealed class AgentOptions
     public int SchedulerIntervalSeconds { get; set; } = 30;
 
     public int StaleJobTimeoutMinutes { get; set; } = 720;
+
+    // ------------------------------------------------------------
+    // Performance: keep the PC responsive while a backup runs.
+    // ------------------------------------------------------------
+
+    /// <summary>Run with very low disk I/O and idle CPU priority (Windows background mode).</summary>
+    public bool BackgroundMode { get; set; } = true;
+
+    /// <summary>Max disk read speed when the PC is quiet. 0 = unlimited.</summary>
+    public int MaxReadMegabytesPerSecond { get; set; } = 50;
+
+    /// <summary>Max disk read speed while the user is busy (CPU above BusyCpuPercent).</summary>
+    public int BusyReadMegabytesPerSecond { get; set; } = 5;
+
+    /// <summary>Total CPU % above which the PC counts as busy. 0 = never slow down.</summary>
+    public int BusyCpuPercent { get; set; } = 40;
+
+    /// <summary>Scheduled backups are postponed while a laptop is on battery below this %. 0 = always run.</summary>
+    public int MinimumBatteryPercent { get; set; } = 30;
 
     public bool UsesDeviceKey =>
         !string.IsNullOrWhiteSpace(DeviceKey);

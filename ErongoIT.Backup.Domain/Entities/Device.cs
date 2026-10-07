@@ -34,6 +34,13 @@ public sealed class Device
 
     public bool HasApiKey => !string.IsNullOrEmpty(ApiKeyHash);
 
+    /// <summary>
+    /// Set when someone presses "Back up now" (Agent GUI or portal).
+    /// The agent starts a backup at its next check (within ~30 seconds)
+    /// if no backup has started since this time.
+    /// </summary>
+    public DateTime? BackupRequestedAtUtc { get; private set; }
+
     private Device()
     {
     }
@@ -58,6 +65,11 @@ public sealed class Device
         Name = name.Trim();
         Hostname = hostname?.Trim();
         OperatingSystem = operatingSystem?.Trim();
+    }
+
+    public void RequestBackup()
+    {
+        BackupRequestedAtUtc = DateTime.UtcNow;
     }
 
     public void RecordHeartbeat(string? agentVersion = null)

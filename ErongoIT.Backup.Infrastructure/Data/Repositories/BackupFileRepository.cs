@@ -86,9 +86,30 @@ public sealed class BackupFileRepository : IBackupFileRepository
             })
             .ToListAsync(cancellationToken);
 
-        return counts.ToDictionary(
+        var result = counts.ToDictionary(
             x => x.BackupJobId,
             x => x.Count);
+
+        // Newer agents record file versions instead: count the files each
+        // backup added or changed.
+        var versionCounts = await _db.FileVersions
+            .AsNoTracking()
+            .Where(x => x.BackupJobId != null && ids.Contains(x.BackupJobId.Value))
+            .GroupBy(x => x.BackupJobId!.Value)
+            .Select(x => new
+            {
+                BackupJobId = x.Key,
+                Count = x.Count()
+            })
+            .ToListAsync(cancellationToken);
+
+        foreach (var item in versionCounts)
+        {
+            result[item.BackupJobId] =
+                result.GetValueOrDefault(item.BackupJobId) + item.Count;
+        }
+
+        return result;
     }
 
     public async Task AddAsync(

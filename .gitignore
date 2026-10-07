@@ -93,3 +93,12 @@ publish-api/
 deploy-parts/
 upload-parts/
 api-app.tar.gz
+
+.claude-stage/
+
+# Contains credentials
+ErongoIT.Backup.Agent.Gui/appsettings.Development.json
+.password-reset/
+
+# Stray build files with Windows paths as names
+C*UsersRaymond*

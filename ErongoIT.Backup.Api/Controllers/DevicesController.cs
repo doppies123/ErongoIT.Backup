@@ -201,6 +201,29 @@ public sealed class DevicesController : ControllerBase
         return NoContent();
     }
 
+    /// <summary>"Back up now" for a device (from the Agent GUI or the portal).</summary>
+    [HttpPost("devices/{id:guid}/backup-now")]
+    public async Task<IActionResult> BackupNow(
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        // A device may only ask for its own backup.
+        if (User.IsInRole("device") &&
+            !string.Equals(User.FindFirst("device_id")?.Value, id.ToString(), StringComparison.OrdinalIgnoreCase))
+        {
+            return Forbid();
+        }
+
+        var updated = await _deviceService.RequestBackupAsync(
+            id,
+            cancellationToken);
+
+        if (!updated)
+            return NotFound();
+
+        return Accepted();
+    }
+
     [HttpPost("devices/{id:guid}/heartbeat")]
     public async Task<IActionResult> Heartbeat(
         Guid id,

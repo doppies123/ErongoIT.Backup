@@ -11,7 +11,9 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using System.ServiceProcess;
 using System.Windows;
+using ErongoIT.Backup.Agent.Configuration;
 using System.Windows.Media;
 using System.Windows.Shapes;
 using System.Windows.Threading;
@@ -21,6 +23,7 @@ namespace ErongoIT.Backup.ServiceManager;
 public partial class MainWindow : Window
 {
     private const string DefaultCloudUrl = "https://backup.erongoit.com";
+    private const string AgentServiceName = "ErongoITBackupAgent";
 
     private static readonly Brush Green = new SolidColorBrush(Color.FromRgb(0x2E, 0xB8, 0x4F));
     private static readonly Brush Red = new SolidColorBrush(Color.FromRgb(0xD6, 0x28, 0x28));
@@ -81,12 +84,15 @@ public partial class MainWindow : Window
         string ApiBaseUrl,
         string? Username,
         string? Password,
-        Guid DeviceId)
+        Guid DeviceId,
+        string? DeviceKey = null)
     {
+        public bool UsesDeviceKey => !string.IsNullOrWhiteSpace(DeviceKey);
+
         public bool HasCredentials =>
-            !string.IsNullOrWhiteSpace(Username) &&
-            !string.IsNullOrWhiteSpace(Password) &&
-            DeviceId != Guid.Empty;
+            DeviceId != Guid.Empty &&
+            (UsesDeviceKey ||
+             (!string.IsNullOrWhiteSpace(Username) && !string.IsNullOrWhiteSpace(Password)));
     }
 
     /// <summary>
@@ -95,6 +101,31 @@ public partial class MainWindow : Window
     /// </summary>
     private static AgentSettings LoadAgentSettings(string rootPath)
     {
+        // Registered PC: same agent.json and device key as the service.
+        var enrolled = AgentConfigFile.TryLoad();
+
+        if (enrolled is not null)
+        {
+            try
+            {
+                var key = enrolled.GetDeviceKey();
+
+                if (!string.IsNullOrWhiteSpace(key))
+                {
+                    return new AgentSettings(
+                        enrolled.ApiBaseUrl.TrimEnd('/'),
+                        null,
+                        null,
+                        enrolled.DeviceId,
+                        key);
+                }
+            }
+            catch
+            {
+                // Fall back to developer settings below.
+            }
+        }
+
         var url = DefaultCloudUrl;
         string? username = null;
         string? password = null;
@@ -193,10 +224,47 @@ public partial class MainWindow : Window
         await RefreshCloudStatusAsync();
     }
 
+    private static ServiceControllerStatus? GetServiceStatus()
+    {
+        try
+        {
+            using var service = ServiceController.GetServices()
+                .FirstOrDefault(s => s.ServiceName == AgentServiceName);
+
+            return service?.Status;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     private void RefreshLocalStatus()
     {
-        var agentRunning = IsProjectRunning("ErongoIT.Backup.Agent");
-        SetLed(AgentLed, AgentStatusText, agentRunning ? Green : Red, agentRunning ? "Running" : "Stopped");
+        var serviceStatus = GetServiceStatus();
+        bool agentRunning;
+
+        if (serviceStatus is not null)
+        {
+            agentRunning = serviceStatus == ServiceControllerStatus.Running;
+
+            var (colour, text) = serviceStatus switch
+            {
+                ServiceControllerStatus.Running => (Green, "Running (Windows service)"),
+                ServiceControllerStatus.StartPending => (Amber, "Starting..."),
+                ServiceControllerStatus.StopPending => (Amber, "Stopping..."),
+                _ => (Red, "Stopped (Windows service)")
+            };
+
+            SetLed(AgentLed, AgentStatusText, colour, text);
+            AgentModeText.Text = "Windows service — starts with Windows and runs without anyone logged in.";
+        }
+        else
+        {
+            agentRunning = IsProjectRunning("ErongoIT.Backup.Agent");
+            SetLed(AgentLed, AgentStatusText, agentRunning ? Green : Red, agentRunning ? "Running (developer)" : "Stopped");
+            AgentModeText.Text = "Developer mode (dotnet run). Install the service for real use.";
+        }
 
         var apiRunning = IsPortOpen(5230);
         SetLed(ApiLed, ApiStatusText, apiRunning ? Green : Grey, apiRunning ? "Running" : "Stopped");
@@ -249,7 +317,7 @@ public partial class MainWindow : Window
             {
                 LastSeenText.Text = "—";
                 LastBackupText.Text =
-                    "Agent login not configured (ErongoIT.Backup.Agent\\appsettings.Development.json).";
+                    "This PC is not registered. Open the Backup GUI to run setup.";
             }
             else
             {
@@ -366,9 +434,13 @@ public partial class MainWindow : Window
         if (_accessToken is not null && DateTime.UtcNow < _accessTokenExpiresUtc)
             return _accessToken;
 
-        using var response = await _http.PostAsJsonAsync(
-            $"{_settings.ApiBaseUrl}/api/auth/login",
-            new { username = _settings.Username, password = _settings.Password });
+        using var response = _settings.UsesDeviceKey
+            ? await _http.PostAsJsonAsync(
+                $"{_settings.ApiBaseUrl}/api/auth/device",
+                new { deviceId = _settings.DeviceId, deviceKey = _settings.DeviceKey })
+            : await _http.PostAsJsonAsync(
+                $"{_settings.ApiBaseUrl}/api/auth/login",
+                new { username = _settings.Username, password = _settings.Password });
 
         if (!response.IsSuccessStatusCode)
             throw new InvalidOperationException($"login failed (HTTP {(int)response.StatusCode})");
@@ -388,9 +460,29 @@ public partial class MainWindow : Window
     /// The Agent logs "Next run=..." every time it checks its schedule.
     /// Read the most recent one from the end of the log.
     /// </summary>
+    /// <summary>
+    /// Service: newest C:\ProgramData\ErongoIT Backup\logs\agent-*.log.
+    /// Developer: logs\Agent.log in the repository.
+    /// </summary>
+    private string GetAgentLogPath()
+    {
+        if (GetServiceStatus() is not null && Directory.Exists(AgentConfigFile.LogDirectory))
+        {
+            var newest = new DirectoryInfo(AgentConfigFile.LogDirectory)
+                .GetFiles("agent-*.log")
+                .OrderByDescending(f => f.LastWriteTimeUtc)
+                .FirstOrDefault();
+
+            if (newest is not null)
+                return newest.FullName;
+        }
+
+        return System.IO.Path.Combine(_logPath, "Agent.log");
+    }
+
     private string? ReadNextRunFromAgentLog()
     {
-        var path = System.IO.Path.Combine(_logPath, "Agent.log");
+        var path = GetAgentLogPath();
 
         if (!File.Exists(path))
             return null;
@@ -433,7 +525,7 @@ public partial class MainWindow : Window
 
     private void ViewAgentLog_Click(object sender, RoutedEventArgs e)
     {
-        var path = System.IO.Path.Combine(_logPath, "Agent.log");
+        var path = GetAgentLogPath();
 
         if (!File.Exists(path))
         {
@@ -452,8 +544,55 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>Starting/stopping a service needs admin rights: run sc.exe elevated.</summary>
+    private async Task ControlServiceAsync(string verb)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = "sc.exe",
+            Arguments = $"{verb} {AgentServiceName}",
+            UseShellExecute = true,
+            Verb = "runas",
+            WindowStyle = ProcessWindowStyle.Hidden
+        };
+
+        using var process = Process.Start(psi);
+
+        if (process is not null)
+            await process.WaitForExitAsync();
+
+        for (var i = 0; i < 20; i++)
+        {
+            await Task.Delay(500);
+            RefreshLocalStatus();
+
+            var status = GetServiceStatus();
+
+            if (status is ServiceControllerStatus.Running or ServiceControllerStatus.Stopped)
+                break;
+        }
+    }
+
     private async void AgentStart_Click(object sender, RoutedEventArgs e)
     {
+        if (GetServiceStatus() is not null)
+        {
+            try
+            {
+                await ControlServiceAsync("start");
+            }
+            catch (System.ComponentModel.Win32Exception)
+            {
+                // Administrator prompt declined.
+            }
+            catch (Exception ex)
+            {
+                ShowError("Unable to start the Agent service", ex);
+            }
+
+            return;
+        }
+
         try
         {
             if (IsProjectRunning("ErongoIT.Backup.Agent"))
@@ -474,8 +613,35 @@ public partial class MainWindow : Window
         }
     }
 
-    private void AgentStop_Click(object sender, RoutedEventArgs e)
+    private async void AgentStop_Click(object sender, RoutedEventArgs e)
     {
+        if (GetServiceStatus() is not null)
+        {
+            var answer = MessageBox.Show(
+                this,
+                "Stop the backup service? Scheduled backups will not run until it is started again.",
+                "Stop Agent",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question);
+
+            if (answer != MessageBoxResult.Yes)
+                return;
+
+            try
+            {
+                await ControlServiceAsync("stop");
+            }
+            catch (System.ComponentModel.Win32Exception)
+            {
+            }
+            catch (Exception ex)
+            {
+                ShowError("Unable to stop the Agent service", ex);
+            }
+
+            return;
+        }
+
         StopProjectProcesses("ErongoIT.Backup.Agent");
         RefreshLocalStatus();
     }

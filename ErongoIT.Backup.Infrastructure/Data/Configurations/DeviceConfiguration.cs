@@ -43,6 +43,8 @@ public sealed class DeviceConfiguration : IEntityTypeConfiguration<Device>
 
         builder.Property(x => x.ApiKeyIssuedAtUtc);
 
+        builder.Property(x => x.BackupRequestedAtUtc);
+
         builder.Ignore(x => x.HasApiKey);
 
         builder.HasOne<Customer>()

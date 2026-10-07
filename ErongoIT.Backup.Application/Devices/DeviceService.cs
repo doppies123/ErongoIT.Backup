@@ -104,6 +104,24 @@ public sealed class DeviceService : IDeviceService
         return true;
     }
 
+    public async Task<bool> RequestBackupAsync(
+        Guid id,
+        CancellationToken cancellationToken = default)
+    {
+        var device = await _devices.GetByIdAsync(
+            id,
+            cancellationToken);
+
+        if (device is null)
+            return false;
+
+        device.RequestBackup();
+
+        await _devices.SaveChangesAsync(cancellationToken);
+
+        return true;
+    }
+
     public async Task<bool> RecordHeartbeatAsync(
         Guid id,
         string? agentVersion = null,

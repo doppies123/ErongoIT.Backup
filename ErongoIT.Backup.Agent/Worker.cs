@@ -1,6 +1,7 @@
 using ErongoIT.Backup.Agent.Api;
 using ErongoIT.Backup.Agent.Backup;
 using ErongoIT.Backup.Agent.Configuration;
+using ErongoIT.Backup.Agent.Performance;
 using Microsoft.Extensions.Options;
 
 namespace ErongoIT.Backup.Agent;
@@ -12,6 +13,11 @@ public sealed class Worker : BackgroundService
     private readonly ILogger<Worker> _logger;
 
     private DateTime _lastHeartbeatUtc = DateTime.MinValue;
+
+    // After a restart, any job still "Running" for this PC was cut off
+    // (service stopped, PC shut down, upgrade). Close it straight away
+    // instead of waiting StaleJobTimeoutMinutes, which blocked backups.
+    private bool _startupRecoveryDone;
 
     public Worker(
         IBackupApiClient api,
@@ -51,6 +57,29 @@ public sealed class Worker : BackgroundService
         _logger.LogInformation(
             "Authentication: {Mode}",
             _options.UsesDeviceKey ? "device key (enrolled)" : "admin login (developer)");
+
+        // Keep the user's PC responsive while backing up.
+        if (_options.BackgroundMode)
+        {
+            _logger.LogInformation(
+                "Priority: {Priority}",
+                BackgroundPriority.Enter());
+        }
+
+        IoThrottle.Current = new IoThrottle(
+            _options.MaxReadMegabytesPerSecond,
+            _options.BusyReadMegabytesPerSecond,
+            _options.BusyCpuPercent);
+
+        _logger.LogInformation(
+            "Disk read limit: {Limit}",
+            IoThrottle.Current.Describe());
+
+        _logger.LogInformation(
+            "Battery: {Battery}",
+            _options.MinimumBatteryPercent > 0
+                ? $"scheduled backups wait while on battery below {_options.MinimumBatteryPercent}%"
+                : "backups run on battery");
 
         _logger.LogInformation(
             "============================================================");
@@ -178,16 +207,20 @@ public sealed class Worker : BackgroundService
 
         var recovered = await _api.RecoverStaleJobsAsync(
             _options.DeviceId,
-            _options.StaleJobTimeoutMinutes,
+            _startupRecoveryDone ? _options.StaleJobTimeoutMinutes : 1,
             cancellationToken);
 
         if (recovered > 0)
         {
             _logger.LogWarning(
-                "Recovered {RecoveredJobs} stale backup job(s) for device {DeviceId}.",
+                _startupRecoveryDone
+                    ? "Recovered {RecoveredJobs} stale backup job(s) for device {DeviceId}."
+                    : "Closed {RecoveredJobs} backup job(s) for device {DeviceId} that were interrupted before this agent started.",
                 recovered,
                 _options.DeviceId);
         }
+
+        _startupRecoveryDone = true;
 
         var plans = await _api.GetBackupPlansAsync(
             _options.CustomerId,
@@ -234,12 +267,14 @@ public sealed class Worker : BackgroundService
         await CheckPlanAsync(
             plan,
             jobs,
+            device.BackupRequestedAtUtc,
             cancellationToken);
     }
 
     private async Task CheckPlanAsync(
         BackupPlanDto plan,
         IReadOnlyList<BackupJobDto> jobs,
+        DateTime? backupRequestedAtUtc,
         CancellationToken cancellationToken)
     {
         _logger.LogInformation(
@@ -279,6 +314,25 @@ public sealed class Worker : BackgroundService
                 x => x.CompletedAtUtc)
             .FirstOrDefault();
 
+        // "Back up now" pressed (Agent GUI or portal) since the last backup started?
+        var lastStartUtc = jobs
+            .Select(x => (DateTime?)x.StartedAtUtc)
+            .Max() ?? DateTime.MinValue;
+
+        if (backupRequestedAtUtc is DateTime requestedUtc &&
+            requestedUtc > lastStartUtc)
+        {
+            _logger.LogInformation(
+                "Backup requested at {RequestedLocal} (Back up now). Starting.",
+                requestedUtc.ToLocalTime());
+
+            await RunBackupAsync(
+                plan,
+                cancellationToken);
+
+            return;
+        }
+
         var nowLocal = DateTime.Now;
 
         if (!IsPlanDue(
@@ -296,6 +350,20 @@ public sealed class Worker : BackgroundService
                 plan.Id,
                 nowLocal,
                 nextRun);
+
+            return;
+        }
+
+        if (_options.MinimumBatteryPercent > 0 &&
+            PowerStatus.IsOnBattery(out var batteryPercent) &&
+            batteryPercent >= 0 &&
+            batteryPercent < _options.MinimumBatteryPercent)
+        {
+            _logger.LogInformation(
+                "Plan {PlanId} is due, but the PC is on battery at {Battery}% (minimum {Minimum}%). Waiting for power.",
+                plan.Id,
+                batteryPercent,
+                _options.MinimumBatteryPercent);
 
             return;
         }
@@ -457,6 +525,41 @@ public sealed class Worker : BackgroundService
             .ToString(@"hh\:mm");
     }
 
+    /// <summary>
+    /// Folders to back up. Re-read from agent.json before every backup so
+    /// that folders added or removed in the Agent GUI take effect without
+    /// restarting the service.
+    /// </summary>
+    private IReadOnlyList<string> GetCurrentSourceFolders()
+    {
+        if (_options.UsesDeviceKey)
+        {
+            var config = AgentConfigFile.TryLoad();
+
+            if (config is not null &&
+                config.DeviceId == _options.DeviceId &&
+                config.SourcePaths.Count > 0)
+            {
+                var latest = new AgentOptions
+                {
+                    SourcePaths = new List<string>(config.SourcePaths)
+                }.GetSourceFolders();
+
+                if (!latest.SequenceEqual(_options.GetSourceFolders(), StringComparer.OrdinalIgnoreCase))
+                {
+                    _logger.LogInformation(
+                        "Folder list changed in agent.json: {Folders}",
+                        string.Join("; ", latest));
+
+                    _options.SourcePaths = latest.ToList();
+                    _options.SourcePath = string.Empty;
+                }
+            }
+        }
+
+        return _options.GetSourceFolders();
+    }
+
     private async Task RunBackupAsync(
         BackupPlanDto plan,
         CancellationToken cancellationToken)
@@ -473,7 +576,7 @@ public sealed class Worker : BackgroundService
             GetScheduleTypeName(
                 plan.ScheduleType));
 
-        var sourceFolders = _options.GetSourceFolders();
+        var sourceFolders = GetCurrentSourceFolders();
 
         foreach (var folder in sourceFolders)
         {
@@ -487,6 +590,10 @@ public sealed class Worker : BackgroundService
             .Where(Directory.Exists)
             .ToList();
 
+        var missingFolders = sourceFolders
+            .Except(existingFolders, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
         if (existingFolders.Count == 0)
         {
             throw new DirectoryNotFoundException(
@@ -495,23 +602,16 @@ public sealed class Worker : BackgroundService
         }
 
         BackupJobDto? job = null;
+        SyncManifest? manifest = null;
 
         try
         {
-            _logger.LogInformation(
-                "Creating backup job for plan {PlanId}.",
-                plan.Id);
-
             job = await _api.CreateBackupJobAsync(
                 _options.CustomerId,
                 _options.DeviceId,
                 plan.Id,
                 type: 1,
                 cancellationToken);
-
-            _logger.LogInformation(
-                "Created backup job {BackupJobId}.",
-                job.Id);
 
             await _api.StartBackupJobAsync(
                 job.Id,
@@ -521,236 +621,96 @@ public sealed class Worker : BackgroundService
                 "Backup job {BackupJobId} is now Running.",
                 job.Id);
 
-            // Each folder is stored as "<FolderName>\<relative path>"
-            // (same layout as the Agent GUI). Two folders with the same
-            // name get a numeric suffix so their files never collide.
-            var files = new List<(string FullPath, string RelativePath, long Length)>();
-            var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            // 1. What the server already has for this PC.
+            manifest = await LoadManifestAsync(cancellationToken);
 
-            foreach (var folder in existingFolders)
-            {
-                var baseName = new DirectoryInfo(folder).Name;
+            // 2. Scan the folders: name, size and date modified only (cheap).
+            var scanned = ScanFolders(existingFolders);
 
-                if (string.IsNullOrWhiteSpace(baseName) || baseName.EndsWith(':'))
-                    baseName = folder.Replace(":", string.Empty).Trim('\\', '/');
+            long bytesSelected = scanned.Sum(x => x.Length);
 
-                var folderName = baseName;
-                var suffix = 2;
+            var changedCandidates = scanned
+                .Where(x => !manifest.IsUnchanged(x.ServerPath, x.Length, x.LastWriteUtc))
+                .ToList();
 
-                while (!usedNames.Add(folderName))
-                    folderName = $"{baseName}_{suffix++}";
+            // Files the server has that are gone from disk. Files inside a
+            // folder that is temporarily missing (USB drive unplugged) are
+            // kept, not treated as deleted.
+            var scannedPaths = scanned
+                .Select(x => x.ServerPath)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-                IEnumerable<string> paths;
+            var missingPrefixes = missingFolders
+                .Select(f => SyncManifest.ToServerPath(f) + "/")
+                .ToList();
 
-                try
-                {
-                    paths = Directory.EnumerateFiles(
-                        folder,
-                        "*",
-                        new EnumerationOptions
-                        {
-                            RecurseSubdirectories = true,
-                            IgnoreInaccessible = true,
-                            AttributesToSkip = FileAttributes.ReparsePoint
-                        });
-
-                    foreach (var path in paths)
-                    {
-                        var info = new FileInfo(path);
-
-                        if (!info.Exists)
-                            continue;
-
-                        files.Add((
-                            info.FullName,
-                            Path.Combine(
-                                folderName,
-                                Path.GetRelativePath(folder, info.FullName)),
-                            info.Length));
-                    }
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                {
-                    _logger.LogWarning(
-                        "Could not fully scan {Folder}: {Message}",
-                        folder,
-                        ex.Message);
-                }
-            }
+            var deleted = manifest.Files.Keys
+                .Where(p => !scannedPaths.Contains(p))
+                .Where(p => !missingPrefixes.Any(m => p.StartsWith(m, StringComparison.OrdinalIgnoreCase)))
+                .ToList();
 
             _logger.LogInformation(
-                "Found {FileCount} file(s) in source.",
-                files.Count);
+                "Found {FileCount} file(s) ({Bytes} bytes). New or changed: {Changed}. Deleted: {Deleted}.",
+                scanned.Count,
+                bytesSelected,
+                changedCandidates.Count,
+                deleted.Count);
 
-            long bytesSelected = files.Sum(x => x.Length);
-            long bytesProcessed = 0;
-            long bytesUploaded = 0;
-            long bytesTransferred = 0;
-            var filesUploaded = 0;
-            var filesSkipped = 0;
+            // 3. Send new and changed files.
+            var totals = await SendChangesAsync(
+                job.Id,
+                manifest,
+                changedCandidates,
+                bytesSelected,
+                cancellationToken);
 
-            const int batchSize = 200;
-
-            // Reuse hashes of files whose size and modified time are unchanged.
-            var hashCache = FileHashCache.Load(
-                "agent",
-                directory: AgentConfigFile.DataDirectory);
-
-            for (var index = 0; index < files.Count; index += batchSize)
+            // 4. Record deletions.
+            foreach (var batch in deleted.Chunk(ChangeBatchSize))
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                var batch = files
-                    .Skip(index)
-                    .Take(batchSize)
-                    .ToList();
-
-                // 1. Hash locally.
-                var requests = new List<ExistingFileRequest>();
-
-                foreach (var file in batch)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-
-                    try
-                    {
-                        var sha256 = await hashCache.GetSha256Async(
-                            file.FullPath,
-                            cancellationToken);
-
-                        requests.Add(new ExistingFileRequest(
-                            file.RelativePath,
-                            sha256,
-                            file.Length));
-                    }
-                    catch (Exception ex) when (
-                        ex is IOException or UnauthorizedAccessException)
-                    {
-                        _logger.LogWarning(
-                            "Skipping unreadable file {RelativePath}: {Message}",
-                            file.RelativePath,
-                            ex.Message);
-
-                        bytesSelected -= file.Length;
-                    }
-                }
-
-                // 2. Ask the server which ones it already has.
-                var result = await _api.RegisterExistingFilesAsync(
-                    job.Id,
-                    _options.CustomerId,
+                var result = await _api.ApplyChangesAsync(
                     _options.DeviceId,
-                    requests,
+                    job.Id,
+                    Array.Empty<FileChangeDto>(),
+                    batch,
                     cancellationToken);
 
-                var missing = result.MissingRelativePaths
-                    .ToHashSet(StringComparer.Ordinal);
+                foreach (var path in batch)
+                    manifest.Files.Remove(path);
 
-                filesSkipped += result.RegisteredCount;
-                bytesProcessed += result.RegisteredBytes;
-
-                // 3. Upload only new or changed files.
-                foreach (var file in batch)
-                {
-                    if (!missing.Contains(file.RelativePath))
-                        continue;
-
-                    cancellationToken.ThrowIfCancellationRequested();
-
-                    _logger.LogInformation(
-                        "Uploading {RelativePath} ({Bytes} bytes).",
-                        file.RelativePath,
-                        file.Length);
-
-                    await using var prepared =
-                        await UploadCompression.PrepareAsync(
-                            file.FullPath,
-                            cancellationToken);
-
-                    await using (var stream =
-                        FileHashing.OpenForUpload(prepared.UploadPath))
-                    {
-                        await _api.UploadFileAsync(
-                            job.Id,
-                            _options.CustomerId,
-                            _options.DeviceId,
-                            file.RelativePath,
-                            stream,
-                            Path.GetFileName(file.FullPath),
-                            cancellationToken,
-                            prepared.Encoding);
-                    }
-
-                    bytesTransferred += prepared.UploadLength;
-
-                    if (prepared.IsCompressed)
-                    {
-                        _logger.LogInformation(
-                            "Compressed {RelativePath}: {Original} -> {Sent} bytes.",
-                            file.RelativePath,
-                            prepared.OriginalLength,
-                            prepared.UploadLength);
-                    }
-
-                    bytesUploaded += file.Length;
-                    bytesProcessed += file.Length;
-                    filesUploaded++;
-                }
-
-                try
-                {
-                    await _api.UpdateProgressAsync(
-                        job.Id,
-                        bytesSelected,
-                        Math.Min(bytesProcessed, bytesSelected),
-                        cancellationToken);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(
-                        "Progress update failed: {Message}",
-                        ex.Message);
-                }
+                totals.Deleted += result.Deleted;
             }
 
-            bytesSelected = Math.Max(bytesSelected, 0);
-            bytesUploaded = Math.Min(bytesUploaded, bytesSelected);
-
-            hashCache.Save();
+            manifest.Save(AgentConfigFile.DataDirectory);
 
             _logger.LogInformation(
-                "Transfer: {Uploaded} bytes of new/changed data sent as {Transferred} bytes.",
-                bytesUploaded,
-                bytesTransferred);
+                "Transfer: {Uploaded} bytes of new content sent as {Transferred} bytes.",
+                totals.BytesUploaded,
+                totals.BytesTransferred);
 
             _logger.LogInformation(
-                "Hash cache: {Hits} file(s) unchanged since last scan (not re-read), {Misses} file(s) hashed.",
-                hashCache.Hits,
-                hashCache.Misses);
-
-            _logger.LogInformation(
-                "Unchanged files skipped: {Skipped}. New/changed files uploaded: {Uploaded}.",
-                filesSkipped,
-                filesUploaded);
+                "Result: {Added} added, {Changed} changed, {Deleted} deleted, {Skipped} skipped (unreadable or changing). {Unchanged} unchanged.",
+                totals.Added,
+                totals.Changed,
+                totals.Deleted,
+                totals.Skipped,
+                scanned.Count - changedCandidates.Count);
 
             await _api.CompleteBackupJobAsync(
                 job.Id,
                 bytesSelected,
-                bytesUploaded,
+                totals.BytesUploaded,
                 cancellationToken);
 
             _logger.LogInformation(
                 "========== BACKUP COMPLETED ==========");
-
-            _logger.LogInformation(
-                "Job={BackupJobId}, Files={FilesUploaded}, Selected={BytesSelected}, Uploaded={BytesUploaded}.",
-                job.Id,
-                filesUploaded,
-                bytesSelected,
-                bytesUploaded);
         }
         catch (Exception ex)
         {
+            // Keep what was already sent: the next backup continues from there.
+            manifest?.Save(AgentConfigFile.DataDirectory);
+
             _logger.LogError(
                 ex,
                 "========== BACKUP FAILED ==========");
@@ -759,10 +719,17 @@ public sealed class Worker : BackgroundService
             {
                 try
                 {
+                    // Not the stopping token: the job must still be closed
+                    // when the service is stopping.
+                    using var failTimeout = new CancellationTokenSource(
+                        TimeSpan.FromSeconds(15));
+
                     await _api.FailBackupJobAsync(
                         job.Id,
-                        ex.Message,
-                        cancellationToken);
+                        ex is OperationCanceledException && cancellationToken.IsCancellationRequested
+                            ? "Backup interrupted: the backup service was stopped or restarted."
+                            : ex.Message,
+                        failTimeout.Token);
                 }
                 catch (Exception failException)
                 {
@@ -775,5 +742,300 @@ public sealed class Worker : BackgroundService
 
             throw;
         }
+    }
+
+    private const int ChangeBatchSize = 500;
+
+    private sealed record ScannedFile(
+        string FullPath,
+        string ServerPath,
+        long Length,
+        DateTime LastWriteUtc);
+
+    private sealed class BackupTotals
+    {
+        public int Added;
+        public int Changed;
+        public int Deleted;
+        public int Skipped;
+        public long BytesUploaded;
+        public long BytesTransferred;
+    }
+
+    /// <summary>
+    /// Loads the local list of what the server holds; rebuilds it from the
+    /// server when missing, from another device or older than a week.
+    /// </summary>
+    private async Task<SyncManifest> LoadManifestAsync(
+        CancellationToken cancellationToken)
+    {
+        var manifest = SyncManifest.Load(AgentConfigFile.DataDirectory);
+
+        if (!manifest.NeedsFullSync(_options.DeviceId))
+            return manifest;
+
+        _logger.LogInformation(
+            "Rebuilding the local file list from the server (first run, or weekly check).");
+
+        var rebuilt = new SyncManifest
+        {
+            DeviceId = _options.DeviceId,
+            FullSyncUtc = DateTime.UtcNow
+        };
+
+        string? after = null;
+
+        do
+        {
+            var page = await _api.GetSyncStateAsync(
+                _options.DeviceId,
+                after,
+                5000,
+                cancellationToken);
+
+            foreach (var file in page.Files)
+            {
+                rebuilt.Files[file.Path] = new SyncManifest.Entry(
+                    file.Sha256,
+                    file.SizeBytes,
+                    (file.LastWriteUtc ?? DateTime.MinValue).ToUniversalTime().Ticks);
+            }
+
+            after = page.NextAfterPath;
+        }
+        while (after is not null);
+
+        _logger.LogInformation(
+            "The server holds {Count} file(s) for this PC.",
+            rebuilt.Files.Count);
+
+        rebuilt.Save(AgentConfigFile.DataDirectory);
+
+        return rebuilt;
+    }
+
+    private List<ScannedFile> ScanFolders(
+        IReadOnlyList<string> folders)
+    {
+        var files = new List<ScannedFile>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var folder in folders)
+        {
+            try
+            {
+                var paths = Directory.EnumerateFiles(
+                    folder,
+                    "*",
+                    new EnumerationOptions
+                    {
+                        RecurseSubdirectories = true,
+                        IgnoreInaccessible = true,
+                        AttributesToSkip = FileAttributes.ReparsePoint
+                    });
+
+                foreach (var path in paths)
+                {
+                    var info = new FileInfo(path);
+
+                    if (!info.Exists)
+                        continue;
+
+                    var serverPath = SyncManifest.ToServerPath(info.FullName);
+
+                    // Overlapping folders (C:\Data and C:\Data\Sub): once.
+                    if (!seen.Add(serverPath))
+                        continue;
+
+                    files.Add(new ScannedFile(
+                        info.FullName,
+                        serverPath,
+                        info.Length,
+                        info.LastWriteTimeUtc));
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _logger.LogWarning(
+                    "Could not fully scan {Folder}: {Message}",
+                    folder,
+                    ex.Message);
+            }
+        }
+
+        return files;
+    }
+
+    private async Task<BackupTotals> SendChangesAsync(
+        Guid jobId,
+        SyncManifest manifest,
+        IReadOnlyList<ScannedFile> candidates,
+        long bytesSelected,
+        CancellationToken cancellationToken)
+    {
+        var totals = new BackupTotals();
+
+        if (candidates.Count == 0)
+            return totals;
+
+        var hashCache = FileHashCache.Load(
+            "agent",
+            directory: AgentConfigFile.DataDirectory);
+
+        long bytesProcessed = bytesSelected - candidates.Sum(x => x.Length);
+        var batchNumber = 0;
+
+        foreach (var batch in candidates.Chunk(ChangeBatchSize))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            batchNumber++;
+
+            // a. Fingerprint the changed files (unchanged ones were never read).
+            var hashed = new List<(ScannedFile File, string Sha256)>();
+
+            foreach (var file in batch)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                try
+                {
+                    var sha256 = await hashCache.GetSha256Async(
+                        file.FullPath,
+                        cancellationToken);
+
+                    hashed.Add((file, sha256));
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    totals.Skipped++;
+
+                    _logger.LogWarning(
+                        "Skipping unreadable file {Path}: {Message}",
+                        file.FullPath,
+                        ex.Message);
+                }
+            }
+
+            // b. Which contents does the server not have yet? (de-duplication)
+            var missing = (await _api.CheckContentAsync(
+                    _options.DeviceId,
+                    hashed
+                        .Select(x => new ContentReferenceDto(x.Sha256, x.File.Length))
+                        .DistinctBy(x => x.Sha256)
+                        .ToList(),
+                    cancellationToken))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            // c. Upload each missing content once.
+            var failedUploads = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var group in hashed.Where(x => missing.Contains(x.Sha256)).GroupBy(x => x.Sha256))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var file = group.First().File;
+
+                try
+                {
+                    _logger.LogInformation(
+                        "Uploading {Path} ({Bytes} bytes).",
+                        file.FullPath,
+                        file.Length);
+
+                    await using var prepared = await UploadCompression.PrepareAsync(
+                        file.FullPath,
+                        cancellationToken);
+
+                    await using (var stream = FileHashing.OpenForUpload(prepared.UploadPath))
+                    {
+                        await _api.UploadContentAsync(
+                            _options.DeviceId,
+                            group.Key,
+                            stream,
+                            prepared.Encoding,
+                            cancellationToken);
+                    }
+
+                    totals.BytesUploaded += file.Length;
+                    totals.BytesTransferred += prepared.UploadLength;
+                }
+                catch (Exception ex) when (
+                    ex is IOException or UnauthorizedAccessException or HttpRequestException &&
+                    !cancellationToken.IsCancellationRequested)
+                {
+                    // Typically the file changed while being read. Try again next backup.
+                    failedUploads.Add(group.Key);
+                    totals.Skipped += group.Count();
+
+                    _logger.LogWarning(
+                        "Could not upload {Path}; it will be retried at the next backup: {Message}",
+                        file.FullPath,
+                        ex.Message);
+                }
+            }
+
+            // d. Record the new versions.
+            var changes = hashed
+                .Where(x => !failedUploads.Contains(x.Sha256))
+                .Select(x => new FileChangeDto(
+                    x.File.ServerPath,
+                    x.Sha256,
+                    x.File.Length,
+                    x.File.LastWriteUtc))
+                .ToList();
+
+            if (changes.Count > 0)
+            {
+                var result = await _api.ApplyChangesAsync(
+                    _options.DeviceId,
+                    jobId,
+                    changes,
+                    Array.Empty<string>(),
+                    cancellationToken);
+
+                var notRecorded = result.MissingContentPaths
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+                totals.Added += result.Added;
+                totals.Changed += result.Changed;
+                totals.Skipped += notRecorded.Count;
+
+                foreach (var (file, sha256) in hashed)
+                {
+                    if (failedUploads.Contains(sha256) || notRecorded.Contains(file.ServerPath))
+                        continue;
+
+                    manifest.Set(file.ServerPath, sha256, file.Length, file.LastWriteUtc);
+                }
+            }
+
+            bytesProcessed += batch.Sum(x => x.Length);
+
+            // Keep progress if the PC shuts down halfway through a big first backup.
+            if (batchNumber % 10 == 0)
+            {
+                manifest.Save(AgentConfigFile.DataDirectory);
+                hashCache.Save();
+            }
+
+            try
+            {
+                await _api.UpdateProgressAsync(
+                    jobId,
+                    bytesSelected,
+                    Math.Min(bytesProcessed, bytesSelected),
+                    cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(
+                    "Progress update failed: {Message}",
+                    ex.Message);
+            }
+        }
+
+        hashCache.Save();
+
+        return totals;
     }
 }

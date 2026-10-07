@@ -38,6 +38,10 @@ public static class BackupDatabaseExtensions
 
         services.AddScoped<IRetentionService, ErongoIT.Backup.Infrastructure.Maintenance.RetentionService>();
 
+        services.AddScoped<
+            ErongoIT.Backup.Application.FileVersions.IFileVersionService,
+            ErongoIT.Backup.Infrastructure.FileVersions.FileVersionService>();
+
         return services;
     }
 

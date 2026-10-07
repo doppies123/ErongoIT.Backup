@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using ErongoIT.Backup.Agent.Performance;
 
 namespace ErongoIT.Backup.Agent.Backup;
 
@@ -6,40 +7,68 @@ namespace ErongoIT.Backup.Agent.Backup;
 /// Local file hashing shared by the background Agent and the Agent GUI.
 /// The SHA-256 is compared with what the server already stores so that
 /// unchanged files are never uploaded twice.
+///
+/// All reads go through <see cref="IoThrottle.Current"/> when the
+/// background Agent has set one, so a backup never floods the disk.
 /// </summary>
 public static class FileHashing
 {
+    private const int ReadChunkSize = 256 * 1024;
+
     public static async Task<string> ComputeSha256Async(
         string filePath,
         CancellationToken cancellationToken = default)
     {
-        await using var stream = new FileStream(
-            filePath,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.ReadWrite | FileShare.Delete,
-            bufferSize: 1024 * 1024,
-            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        await using var stream = OpenForRead(filePath);
 
-        using var sha256 = SHA256.Create();
+        using var hash = IncrementalHash.CreateHash(
+            HashAlgorithmName.SHA256);
 
-        var hash = await sha256.ComputeHashAsync(
-            stream,
-            cancellationToken);
+        var buffer = new byte[ReadChunkSize];
 
-        return Convert.ToHexString(hash).ToLowerInvariant();
+        while (true)
+        {
+            var read = await stream.ReadAsync(
+                buffer.AsMemory(0, buffer.Length),
+                cancellationToken);
+
+            if (read == 0)
+                break;
+
+            hash.AppendData(buffer, 0, read);
+        }
+
+        return Convert.ToHexString(
+            hash.GetHashAndReset()).ToLowerInvariant();
     }
 
-    public static FileStream OpenForUpload(
+    /// <summary>Opens a file for upload (throttled in the background Agent).</summary>
+    public static Stream OpenForUpload(
         string filePath)
     {
-        return new FileStream(
+        return OpenForRead(filePath);
+    }
+
+    /// <summary>
+    /// Opens a file for sequential reading. Files that other programs have
+    /// open (Outlook, databases) can still be read.
+    /// </summary>
+    public static Stream OpenForRead(
+        string filePath)
+    {
+        var stream = new FileStream(
             filePath,
             FileMode.Open,
             FileAccess.Read,
             FileShare.ReadWrite | FileShare.Delete,
-            bufferSize: 1024 * 1024,
+            bufferSize: ReadChunkSize,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
+
+        var throttle = IoThrottle.Current;
+
+        return throttle is null
+            ? stream
+            : new ThrottledReadStream(stream, throttle);
     }
 }
 

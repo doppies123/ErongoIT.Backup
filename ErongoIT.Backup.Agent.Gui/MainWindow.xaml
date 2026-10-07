@@ -7,7 +7,8 @@
         MinWidth="1000"
         MinHeight="650"
         WindowStartupLocation="CenterScreen"
-        Background="#F3F4F6">
+        Background="#F3F4F6"
+        Icon="pack://application:,,,/app.ico">
 
     <Window.Resources>
 
@@ -380,13 +381,45 @@
 
                                 </Grid>
 
-                                <TextBlock Text="These folders will be included in the backup."
+                                <TextBlock Text="These folders will be included in the backup. Changes are saved straight away (Windows asks for administrator approval)."
                                            Foreground="#68717C"
+                                           TextWrapping="Wrap"
                                            Margin="0,5,0,16"/>
 
                                 <ListBox x:Name="FolderList"
                                          MinHeight="180"
-                                         BorderBrush="#D5D9DE"/>
+                                         BorderBrush="#D5D9DE"
+                                         HorizontalContentAlignment="Stretch">
+
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Margin="2,4">
+
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+
+                                                <TextBlock Text="{Binding}"
+                                                           VerticalAlignment="Center"
+                                                           TextTrimming="CharacterEllipsis"
+                                                           ToolTip="{Binding}"
+                                                           Margin="4,0,12,0"/>
+
+                                                <Button Grid.Column="1"
+                                                        Content="Remove"
+                                                        Tag="{Binding}"
+                                                        Padding="12,4"
+                                                        FontSize="13"
+                                                        Foreground="#B42318"
+                                                        ToolTip="Stop backing up this folder"
+                                                        Click="RemoveFolder_Click"/>
+
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+
+                                </ListBox>
 
                             </StackPanel>
 
@@ -490,166 +523,368 @@
 
                 </ScrollViewer>
 
-                    <!-- RESTORE -->
+                    <!-- RESTORE (CrashPlan-style browser) -->
 
                     <Grid x:Name="RestoreView"
                           Visibility="Collapsed">
 
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
 
+                        <!-- Title -->
                         <StackPanel Grid.Row="0">
 
                             <TextBlock Text="Restore"
                                        FontSize="26"
                                        FontWeight="SemiBold"/>
 
-                            <TextBlock Text="Choose a backup date, select what you want to restore, and choose where to put it."
+                            <TextBlock Text="Open folders, tick the files and folders you want back, and choose a date to restore them as they were then."
                                        Foreground="#68717C"
-                                       Margin="0,5,0,18"/>
+                                       TextWrapping="Wrap"
+                                       Margin="0,5,0,14"/>
 
                         </StackPanel>
 
-                        <Grid Grid.Row="1">
+                        <!-- Toolbar: breadcrumb on its own line, then search / as-of / options -->
+                        <Border Grid.Row="1"
+                                Background="White"
+                                BorderBrush="#D8DCE1"
+                                BorderThickness="1,1,1,0"
+                                CornerRadius="6,6,0,0"
+                                Padding="14,10">
 
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="300"/>
-                                <ColumnDefinition Width="20"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
+                            <Grid>
 
-                            <Border Grid.Column="0"
-                                    Background="White"
-                                    BorderBrush="#D8DCE1"
-                                    BorderThickness="1"
-                                    CornerRadius="6"
-                                    Padding="15">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
 
-                                <StackPanel>
+                                <!-- Breadcrumb: This PC › C: › Users › ... (one line, scrolls if long) -->
+                                <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                                              VerticalScrollBarVisibility="Disabled">
 
-                                    <TextBlock Text="Backup dates"
-                                               FontSize="15"
-                                               FontWeight="SemiBold"
-                                               Margin="0,0,0,10"/>
+                                    <ItemsControl x:Name="RestoreBreadcrumb">
 
-                                    <Calendar x:Name="RestoreCalendar"
-                                              SelectedDatesChanged="RestoreCalendar_SelectedDatesChanged"
-                                              DisplayDateChanged="RestoreCalendar_DisplayDateChanged"/>
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate>
+                                                <StackPanel Orientation="Horizontal"/>
+                                            </ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
 
-                                    <TextBlock x:Name="RestoreCalendarDetails"
-                                               Text="Select a date with a completed backup."
-                                               Foreground="#68717C"
-                                               TextWrapping="Wrap"
-                                               Margin="0,12,0,0"/>
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <StackPanel Orientation="Horizontal"
+                                                            VerticalAlignment="Center">
 
-                                </StackPanel>
+                                                    <!-- Separator before every item except the first -->
+                                                    <TextBlock Text="›"
+                                                               Foreground="#9AA1A9"
+                                                               FontSize="15"
+                                                               VerticalAlignment="Center"
+                                                               Margin="6,0">
+                                                        <TextBlock.Style>
+                                                            <Style TargetType="TextBlock">
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding RelativeSource={RelativeSource PreviousData}}"
+                                                                                 Value="{x:Null}">
+                                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </TextBlock.Style>
+                                                    </TextBlock>
 
-                            </Border>
+                                                    <Button Content="{Binding Name}"
+                                                            Tag="{Binding Path}"
+                                                            Click="RestoreBreadcrumb_Click"
+                                                            Background="Transparent"
+                                                            BorderThickness="0"
+                                                            Padding="2,2"
+                                                            FontSize="14"
+                                                            Foreground="#1F5FAD"
+                                                            Cursor="Hand"/>
 
-                            <Border Grid.Column="2"
-                                    Background="White"
-                                    BorderBrush="#D8DCE1"
-                                    BorderThickness="1"
-                                    CornerRadius="6"
-                                    Padding="20">
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
 
-                                <Grid>
+                                    </ItemsControl>
 
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="*"/>
-                                        <RowDefinition Height="Auto"/>
-                                    </Grid.RowDefinitions>
+                                </ScrollViewer>
 
-                                    <TextBlock Text="Backups on this date"
-                                               FontSize="15"
-                                               FontWeight="SemiBold"/>
+                                <Grid Grid.Row="1"
+                                      Margin="0,10,0,0">
 
-                                    <ComboBox x:Name="RestoreJobComboBox"
-                                              Grid.Row="1"
-                                              Height="34"
-                                              Margin="0,8,0,15"
-                                              SelectionChanged="RestoreJobComboBox_SelectionChanged"/>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
 
-                                    <DataGrid x:Name="RestoreFilesGrid"
-                                              Grid.Row="2"
-                                              AutoGenerateColumns="False"
-                                              IsReadOnly="True"
-                                              Background="White"
-                                              CanUserAddRows="False">
+                                    <!-- Search -->
+                                    <StackPanel Orientation="Horizontal"
+                                                VerticalAlignment="Center">
 
-                                        <DataGrid.Columns>
+                                        <TextBox x:Name="RestoreSearchText"
+                                                 Width="220"
+                                                 Height="30"
+                                                 Padding="6,0"
+                                                 VerticalAlignment="Center"
+                                                 VerticalContentAlignment="Center"
+                                                 ToolTip="Search all backed-up files by name"
+                                                 KeyDown="RestoreSearchText_KeyDown"/>
 
-                                            <DataGridTextColumn Header="File"
-                                                                Binding="{Binding RelativePath}"
-                                                                Width="*"/>
-
-                                            <DataGridTextColumn Header="Size"
-                                                                Binding="{Binding SizeDisplay}"
-                                                                Width="110"/>
-
-                                        </DataGrid.Columns>
-
-                                    </DataGrid>
-
-                                    <StackPanel Grid.Row="3"
-                                                Margin="0,15,0,0">
-
-                                        <TextBlock Text="Restore destination"
-                                                   FontSize="15"
-                                                   FontWeight="SemiBold"
-                                                   Margin="0,0,0,8"/>
-
-                                        <Grid>
-
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                            </Grid.ColumnDefinitions>
-
-                                            <TextBox x:Name="RestoreDestinationText"
-                                                     Height="34"
-                                                     VerticalContentAlignment="Center"/>
-
-                                            <Button Grid.Column="1"
-                                                    Content="Browse..."
-                                                    Height="34"
-                                                    Margin="8,0,0,0"
-                                                    Padding="12,0"
-                                                    Click="BrowseRestoreDestination_Click"/>
-
-                                        </Grid>
-
-                                        <Grid Margin="0,15,0,0">
-
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                            </Grid.ColumnDefinitions>
-
-                                            <TextBlock x:Name="RestoreStatusText"
-                                                       Text="Select a backup date."
-                                                       Foreground="#68717C"
-                                                       VerticalAlignment="Center"
-                                                       TextWrapping="Wrap"/>
-
-                                            <Button x:Name="RestoreBackupButton"
-                                                    Grid.Column="1"
-                                                    Content="Restore Selected Backup"
-                                                    IsEnabled="False"
-                                                    Padding="14,7"
-                                                    Click="RestoreBackup_Click"/>
-
-                                        </Grid>
+                                        <Button Content="Search"
+                                                Height="30"
+                                                Padding="12,0"
+                                                Margin="6,0,0,0"
+                                                VerticalAlignment="Center"
+                                                Click="RestoreSearch_Click"/>
 
                                     </StackPanel>
 
+                                    <!-- As of date / time -->
+                                    <StackPanel Grid.Column="1"
+                                                Orientation="Horizontal"
+                                                HorizontalAlignment="Center"
+                                                VerticalAlignment="Center">
+
+                                        <TextBlock Text="As of"
+                                                   VerticalAlignment="Center"
+                                                   Foreground="#68717C"
+                                                   Margin="0,0,8,0"/>
+
+                                        <DatePicker x:Name="RestoreAsOfDate"
+                                                    Width="130"
+                                                    Height="30"
+                                                    VerticalAlignment="Center"
+                                                    VerticalContentAlignment="Center"
+                                                    SelectedDateChanged="RestoreAsOf_Changed"/>
+
+                                        <ComboBox x:Name="RestoreAsOfHour"
+                                                  Width="58"
+                                                  Height="30"
+                                                  Margin="8,0,0,0"
+                                                  VerticalAlignment="Center"
+                                                  VerticalContentAlignment="Center"
+                                                  SelectionChanged="RestoreAsOf_Changed"/>
+
+                                        <TextBlock Text=":"
+                                                   VerticalAlignment="Center"
+                                                   Margin="4,0"/>
+
+                                        <ComboBox x:Name="RestoreAsOfMinute"
+                                                  Width="58"
+                                                  Height="30"
+                                                  VerticalAlignment="Center"
+                                                  VerticalContentAlignment="Center"
+                                                  SelectionChanged="RestoreAsOf_Changed"/>
+
+                                        <Button Content="Most current"
+                                                Height="30"
+                                                Padding="12,0"
+                                                Margin="8,0,0,0"
+                                                VerticalAlignment="Center"
+                                                ToolTip="Show the latest backed-up version of every file"
+                                                Click="RestoreMostCurrent_Click"/>
+
+                                    </StackPanel>
+
+                                    <!-- Options -->
+                                    <CheckBox x:Name="RestoreIncludeDeleted"
+                                              Grid.Column="2"
+                                              Content="Include deleted files"
+                                              VerticalAlignment="Center"
+                                              Checked="RestoreIncludeDeleted_Changed"
+                                              Unchecked="RestoreIncludeDeleted_Changed"/>
+
                                 </Grid>
 
-                            </Border>
+                            </Grid>
+
+                        </Border>
+
+                        <!-- Folder / file list -->
+                        <DataGrid x:Name="RestoreFilesGrid"
+                                  Grid.Row="2"
+                                  AutoGenerateColumns="False"
+                                  CanUserAddRows="False"
+                                  CanUserDeleteRows="False"
+                                  SelectionMode="Single"
+                                  IsReadOnly="True"
+                                  HeadersVisibility="Column"
+                                  GridLinesVisibility="Horizontal"
+                                  HorizontalGridLinesBrush="#ECEEF1"
+                                  Background="White"
+                                  BorderBrush="#D8DCE1"
+                                  RowHeight="34"
+                                  MouseDoubleClick="RestoreFilesGrid_MouseDoubleClick">
+
+                            <DataGrid.Columns>
+
+                                <DataGridTemplateColumn Width="44">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <CheckBox IsChecked="{Binding IsChecked, Mode=OneWay}"
+                                                      IsEnabled="{Binding CanToggle}"
+                                                      HorizontalAlignment="Center"
+                                                      VerticalAlignment="Center"
+                                                      Click="RestoreRowCheck_Click"/>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
+
+                                <DataGridTemplateColumn Header="Name"
+                                                        Width="*"
+                                                        SortMemberPath="SortName">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Orientation="Horizontal"
+                                                        VerticalAlignment="Center"
+                                                        ToolTip="{Binding Path}">
+
+                                                <TextBlock Text="{Binding Icon}"
+                                                           FontFamily="Segoe UI Emoji"
+                                                           Margin="2,0,8,0"/>
+
+                                                <TextBlock Text="{Binding Name}"
+                                                           Foreground="{Binding NameBrush}"
+                                                           FontStyle="{Binding NameStyle}"/>
+
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
+
+                                <DataGridTextColumn Header="Size"
+                                                    Binding="{Binding SizeDisplay}"
+                                                    SortMemberPath="SizeBytes"
+                                                    IsReadOnly="True"
+                                                    Width="110"/>
+
+                                <DataGridTextColumn Header="Date Modified"
+                                                    Binding="{Binding ModifiedDisplay}"
+                                                    SortMemberPath="ModifiedSort"
+                                                    IsReadOnly="True"
+                                                    Width="170"/>
+
+                            </DataGrid.Columns>
+
+                        </DataGrid>
+
+                        <!-- Restore file pages -->
+                        <StackPanel Grid.Row="3"
+                                    Margin="0,8,0,0"
+                                    HorizontalAlignment="Center">
+
+                            <StackPanel Orientation="Horizontal"
+                                        HorizontalAlignment="Center">
+
+                                <Button x:Name="RestoreFirstPageButton"
+                                        Content="|&lt;"
+                                        Padding="10,4"
+                                        ToolTip="First page"
+                                        Click="RestorePage_Click"
+                                        Tag="first"/>
+
+                                <Button x:Name="RestorePreviousPageButton"
+                                        Content="&lt; Previous"
+                                        Padding="10,4"
+                                        Margin="6,0,0,0"
+                                        Click="RestorePage_Click"
+                                        Tag="previous"/>
+
+                                <TextBlock x:Name="RestorePageNumberText"
+                                           Text="Page 1 of 1"
+                                           VerticalAlignment="Center"
+                                           MinWidth="110"
+                                           TextAlignment="Center"
+                                           Margin="10,0"/>
+
+                                <Button x:Name="RestoreNextPageButton"
+                                        Content="Next &gt;"
+                                        Padding="10,4"
+                                        Click="RestorePage_Click"
+                                        Tag="next"/>
+
+                                <Button x:Name="RestoreLastPageButton"
+                                        Content="&gt;|"
+                                        Padding="10,4"
+                                        Margin="6,0,0,0"
+                                        ToolTip="Last page"
+                                        Click="RestorePage_Click"
+                                        Tag="last"/>
+
+                            </StackPanel>
+
+                            <TextBlock x:Name="RestorePageInfo"
+                                       Text="No files"
+                                       Foreground="#68717C"
+                                       HorizontalAlignment="Center"
+                                       Margin="0,6,0,0"/>
+
+                        </StackPanel>
+
+                        <!-- Selection summary, progress and buttons -->
+                        <Grid Grid.Row="4"
+                              Margin="0,10,0,0">
+
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+
+                            <StackPanel VerticalAlignment="Center">
+
+                                <TextBlock x:Name="RestoreSelectionText"
+                                           Text="Nothing selected"
+                                           FontWeight="SemiBold"/>
+
+                                <TextBlock x:Name="RestoreStatusText"
+                                           Text=""
+                                           Foreground="#68717C"
+                                           TextWrapping="Wrap"
+                                           Margin="0,3,0,0"/>
+
+                                <ProgressBar x:Name="RestoreProgress"
+                                             Height="6"
+                                             Margin="0,6,20,0"
+                                             Visibility="Collapsed"/>
+
+                            </StackPanel>
+
+                            <StackPanel Grid.Column="1"
+                                        Orientation="Horizontal"
+                                        VerticalAlignment="Center">
+
+                                <Button x:Name="RestoreClearButton"
+                                        Content="Clear selection"
+                                        Padding="12,6"
+                                        Click="RestoreClearSelection_Click"/>
+
+                                <Button x:Name="RestoreCancelButton"
+                                        Content="Stop"
+                                        Padding="12,6"
+                                        Margin="8,0,0,0"
+                                        Visibility="Collapsed"
+                                        Click="RestoreCancel_Click"/>
+
+                                <Button x:Name="RestoreBackupButton"
+                                        Content="Restore Files..."
+                                        IsEnabled="False"
+                                        Padding="16,6"
+                                        Margin="8,0,0,0"
+                                        Background="#1F6FD1"
+                                        Foreground="White"
+                                        Click="RestoreFiles_Click"/>
+
+                            </StackPanel>
 
                         </Grid>
 
@@ -660,7 +895,13 @@
                 <Grid x:Name="HistoryView"
                       Visibility="Collapsed">
 
-                    <StackPanel>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <StackPanel Grid.Row="0">
 
                         <TextBlock Text="Backup History"
                                    FontSize="26"
@@ -670,7 +911,10 @@
                                    Foreground="#68717C"
                                    Margin="0,5,0,22"/>
 
+                    </StackPanel>
+
                         <DataGrid x:Name="HistoryGrid"
+                                  Grid.Row="1"
                                   AutoGenerateColumns="False"
                                   IsReadOnly="True"
                                   Background="White"
@@ -707,7 +951,59 @@
 
                         </DataGrid>
 
-                    </StackPanel>
+                    <!-- History pages -->
+                    <Border Grid.Row="2">
+                    <StackPanel Margin="0,10,0,0"
+                                                HorizontalAlignment="Center">
+
+                                        <StackPanel Orientation="Horizontal"
+                                                    HorizontalAlignment="Center">
+
+                                            <Button x:Name="HistoryFirstPageButton"
+                                                    Content="|&lt;"
+                                                    Padding="10,4"
+                                                    ToolTip="First page"
+                                                    Click="HistoryPage_Click"
+                                                    Tag="first"/>
+
+                                            <Button x:Name="HistoryPreviousPageButton"
+                                                    Content="&lt; Previous"
+                                                    Padding="10,4"
+                                                    Margin="6,0,0,0"
+                                                    Click="HistoryPage_Click"
+                                                    Tag="previous"/>
+
+                                            <TextBlock x:Name="HistoryPageNumberText"
+                                                       Text="Page 1 of 1"
+                                                       VerticalAlignment="Center"
+                                                       MinWidth="110"
+                                                       TextAlignment="Center"
+                                                       Margin="10,0"/>
+
+                                            <Button x:Name="HistoryNextPageButton"
+                                                    Content="Next &gt;"
+                                                    Padding="10,4"
+                                                    Click="HistoryPage_Click"
+                                                    Tag="next"/>
+
+                                            <Button x:Name="HistoryLastPageButton"
+                                                    Content="&gt;|"
+                                                    Padding="10,4"
+                                                    Margin="6,0,0,0"
+                                                    ToolTip="Last page"
+                                                    Click="HistoryPage_Click"
+                                                    Tag="last"/>
+
+                                        </StackPanel>
+
+                                        <TextBlock x:Name="HistoryPageInfo"
+                                                   Text="No backups"
+                                                   Foreground="#68717C"
+                                                   HorizontalAlignment="Center"
+                                                   Margin="0,6,0,0"/>
+
+                                    </StackPanel>
+                    </Border>
 
                 </Grid>
 
@@ -757,6 +1053,51 @@
 
                                 <TextBlock x:Name="SettingsDeviceId"
                                            FontFamily="Consolas"/>
+
+                                <TextBlock Text="Mode"
+                                           Foreground="#68717C"
+                                           Margin="0,18,0,4"/>
+
+                                <TextBlock x:Name="SettingsModeText"
+                                           TextWrapping="Wrap"/>
+
+                                <Button Content="Change setup..."
+                                        HorizontalAlignment="Left"
+                                        Padding="14,6"
+                                        Margin="0,22,0,0"
+                                        Click="ChangeSetup_Click"
+                                        ToolTip="Register this PC again, change customer, plan or folders (needs administrator rights)."/>
+
+                            </StackPanel>
+
+                        </Border>
+
+                        <Border Background="White"
+                                CornerRadius="6"
+                                Padding="22"
+                                Margin="0,18,0,0">
+
+                            <StackPanel>
+
+                                <TextBlock Text="Display"
+                                           FontSize="17"
+                                           FontWeight="SemiBold"/>
+
+                                <TextBlock Text="Lines per page (Restore and History lists)"
+                                           Foreground="#68717C"
+                                           Margin="0,18,0,6"/>
+
+                                <ComboBox x:Name="RowsPerPageComboBox"
+                                          Width="140"
+                                          Height="32"
+                                          HorizontalAlignment="Left"
+                                          VerticalContentAlignment="Center"
+                                          SelectionChanged="RowsPerPageComboBox_SelectionChanged"/>
+
+                                <TextBlock Text="Saved for your Windows user on this PC."
+                                           Foreground="#68717C"
+                                           FontSize="12"
+                                           Margin="0,6,0,0"/>
 
                             </StackPanel>
 

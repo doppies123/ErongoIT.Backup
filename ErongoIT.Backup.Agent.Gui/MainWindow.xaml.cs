@@ -17,8 +17,6 @@ public partial class MainWindow : Window
     private BackupPlanDto? _plan;
     private IReadOnlyList<BackupJobDto> _jobs =
         Array.Empty<BackupJobDto>();
-    private IReadOnlyList<BackupFileDto> _restoreFiles =
-        Array.Empty<BackupFileDto>();
 
 
     private CancellationTokenSource? _backupCancellation;
@@ -48,17 +46,20 @@ public partial class MainWindow : Window
         SettingsModeText.Text = _options.IsEnrolled
             ? "Registered PC (device key in C:\\ProgramData\\ErongoIT Backup\\agent.json)"
             : "Developer profile (admin login)";
-        FooterVersion.Text = "Agent 1.1.0";
+        FooterVersion.Text = "Agent 1.3.1";
 
+        // Show every configured folder, including ones that no longer
+        // exist, so they can still be removed.
         foreach (var folder in sourceFolders)
-        {
-            if (Directory.Exists(folder))
-                _folders.Add(folder);
-        }
+            _folders.Add(folder);
 
         UpdateFolderCount();
 
         InitializeTray();
+
+        InitializePaging();
+
+        InitializeAutoRefresh();
 
         _ = LoadDataAsync();
     }
@@ -515,6 +516,15 @@ public partial class MainWindow : Window
             return;
         }
 
+        // Registered PCs: the background service runs the backup (speed
+        // limits, file history, keeps running when this window closes).
+        // The window only asks for it.
+        if (_options.IsEnrolled)
+        {
+            await RequestServiceBackupAsync();
+            return;
+        }
+
         _backupCancellation =
             new CancellationTokenSource();
 
@@ -895,6 +905,36 @@ public partial class MainWindow : Window
         }
     }
 
+    private async Task RequestServiceBackupAsync()
+    {
+        try
+        {
+            await _api.RequestBackupAsync(_options.DeviceId);
+
+            ProtectionDetails.Text =
+                "Backup requested. The backup service starts it within 30 seconds.";
+
+            MessageBox.Show(
+                this,
+                "Backup requested.\n\nThe backup service starts it within 30 seconds. " +
+                "Progress is shown on the Overview and History pages.",
+                "ErongoIT Backup",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+
+            _ = AutoRefreshAsync();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(
+                this,
+                $"The backup could not be requested.\n\n{ex.Message}",
+                "ErongoIT Backup",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
+    }
+
     private void ChangeSetup_Click(
         object sender,
         RoutedEventArgs e)
@@ -1125,416 +1165,22 @@ public partial class MainWindow : Window
         ShowView(BackupView);
     }
 
-    private async void Restore_Click(
-        object sender,
-        RoutedEventArgs e)
-    {
-        ShowView(RestoreView);
-
-        RestoreStatusText.Text =
-            "Select a backup date.";
-
-        RestoreBackupButton.IsEnabled = false;
-
-        _restoreFiles =
-            Array.Empty<BackupFileDto>();
-
-        RestoreFilesGrid.ItemsSource = null;
-        RestoreJobComboBox.ItemsSource = null;
-
-        RestoreCalendar.SelectedDates.Clear();
-
-        var completedJobs =
-            _jobs
-                .Where(x =>
-                    x.Status.Equals(
-                        "Completed",
-                        StringComparison.OrdinalIgnoreCase))
-                .OrderByDescending(
-                    x => x.CompletedAtUtc ?? x.StartedAtUtc)
-                .ToList();
-
-        if (completedJobs.Count == 0)
-        {
-            RestoreCalendarDetails.Text =
-                "No completed backups are available.";
-
-            RestoreStatusText.Text =
-                "No completed backups are available.";
-
-            return;
-        }
-
-        var backupDates =
-            completedJobs
-                .Select(x =>
-                    (x.CompletedAtUtc ?? x.StartedAtUtc)
-                        .ToLocalTime()
-                        .Date)
-                .Distinct()
-                .OrderBy(x => x)
-                .ToList();
-
-
-        RestoreCalendar.DisplayDate =
-            backupDates[^1];
-
-        RestoreCalendarDetails.Text =
-            $"{backupDates.Count:N0} backup dates available. " +
-            "Select a date.";
-
-        RestoreStatusText.Text =
-            "Select a date on the calendar.";
-    }
-
-    private void RestoreCalendar_DisplayDateChanged(
-        object sender,
-        CalendarDateChangedEventArgs e)
-    {
-        UpdateCalendarHighlights();
-    }
-
-    private void RestoreCalendar_SelectedDatesChanged(
-        object sender,
-        SelectionChangedEventArgs e)
-    {
-        if (RestoreCalendar.SelectedDate is not DateTime selectedDate)
-            return;
-
-        var selectedDateOnly =
-            selectedDate.Date;
-
-        var matchingJobs =
-            _jobs
-                .Where(x =>
-                    x.Status.Equals(
-                        "Completed",
-                        StringComparison.OrdinalIgnoreCase))
-                .Where(x =>
-                    (x.CompletedAtUtc ?? x.StartedAtUtc)
-                        .ToLocalTime()
-                        .Date == selectedDateOnly)
-                .OrderByDescending(
-                    x => x.CompletedAtUtc ?? x.StartedAtUtc)
-                .ToList();
-
-        RestoreJobComboBox.ItemsSource =
-            matchingJobs
-                .Select(x => new RestoreJobRow(x))
-                .ToList();
-
-        RestoreFilesGrid.ItemsSource = null;
-
-        _restoreFiles =
-            Array.Empty<BackupFileDto>();
-
-        RestoreBackupButton.IsEnabled = false;
-
-        if (matchingJobs.Count == 0)
-        {
-            RestoreCalendarDetails.Text =
-                $"{selectedDateOnly:dd MMM yyyy}: no completed backup.";
-
-            RestoreStatusText.Text =
-                "No completed backup exists for this date.";
-
-            return;
-        }
-
-        RestoreCalendarDetails.Text =
-            matchingJobs.Count == 1
-                ? $"{selectedDateOnly:dd MMM yyyy}: 1 completed backup."
-                : $"{selectedDateOnly:dd MMM yyyy}: {matchingJobs.Count:N0} completed backups.";
-
-        RestoreStatusText.Text =
-            "Select a backup.";
-
-        RestoreJobComboBox.SelectedIndex = 0;
-    }
-
-    private void UpdateCalendarHighlights()
-    {
-        // WPF's standard Calendar control does not expose
-        // per-date styling through a simple property.
-        // The available backup dates are therefore handled
-        // through the date selection logic.
-    }
-
-    private async void RestoreJobComboBox_SelectionChanged(
-        object sender,
-        SelectionChangedEventArgs e)
-    {
-        if (RestoreJobComboBox.SelectedItem
-            is not RestoreJobRow row)
-            return;
-
-        try
-        {
-            RestoreStatusText.Text =
-                "Loading files...";
-
-            _restoreFiles =
-                await _api.GetBackupFilesAsync(
-                    row.Job.Id);
-
-            RestoreFilesGrid.ItemsSource =
-                _restoreFiles
-                    .Select(x => new RestoreFileRow(x))
-                    .ToList();
-
-            RestoreCalendarDetails.Text =
-                $"{_restoreFiles.Count:N0} files in this backup.";
-
-            RestoreBackupButton.IsEnabled =
-                _restoreFiles.Count > 0;
-
-            RestoreStatusText.Text =
-                _restoreFiles.Count > 0
-                    ? "Ready to restore."
-                    : "This backup contains no files.";
-        }
-        catch (Exception ex)
-        {
-            _restoreFiles =
-                Array.Empty<BackupFileDto>();
-
-            RestoreFilesGrid.ItemsSource = null;
-            RestoreBackupButton.IsEnabled = false;
-
-            RestoreStatusText.Text =
-                $"Unable to load files: {ex.Message}";
-        }
-    }
-
-    private void BrowseRestoreDestination_Click(
-        object sender,
-        RoutedEventArgs e)
-    {
-        var dialog =
-            new Microsoft.Win32.OpenFolderDialog
-            {
-                Title = "Select restore destination."
-            };
-
-        if (dialog.ShowDialog() == true)
-        {
-            RestoreDestinationText.Text =
-                dialog.FolderName;
-        }
-    }
-
-    private async void RestoreBackup_Click(
-        object sender,
-        RoutedEventArgs e)
-    {
-        if (RestoreJobComboBox.SelectedItem
-            is not RestoreJobRow row)
-            return;
-
-        var destination =
-            RestoreDestinationText.Text.Trim();
-
-        if (string.IsNullOrWhiteSpace(destination))
-        {
-            MessageBox.Show(
-                this,
-                "Select a restore destination.",
-                "Restore",
-                MessageBoxButton.OK,
-                MessageBoxImage.Warning);
-
-            return;
-        }
-
-        if (_restoreFiles.Count == 0)
-        {
-            MessageBox.Show(
-                this,
-                "There are no files available in the selected backup.",
-                "Restore",
-                MessageBoxButton.OK,
-                MessageBoxImage.Warning);
-
-            return;
-        }
-
-        var answer =
-            MessageBox.Show(
-                this,
-                $"Restore {_restoreFiles.Count:N0} files to:" +
-                $"{Environment.NewLine}{Environment.NewLine}" +
-                destination +
-                $"{Environment.NewLine}{Environment.NewLine}" +
-                "Existing files may be overwritten.",
-                "Confirm Restore",
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Question);
-
-        if (answer != MessageBoxResult.Yes)
-            return;
-
-        try
-        {
-            RestoreBackupButton.IsEnabled = false;
-            RestoreStatusText.Text =
-                "Restoring files...";
-
-            // Download every file from the server and write it on THIS
-            // computer. (The old server-side restore wrote files on the
-            // server, which is wrong once the API runs on the VPS.)
-            var destinationRoot =
-                Path.GetFullPath(destination);
-
-            Directory.CreateDirectory(destinationRoot);
-
-            var rootWithSeparator =
-                destinationRoot.EndsWith(Path.DirectorySeparatorChar)
-                    ? destinationRoot
-                    : destinationRoot + Path.DirectorySeparatorChar;
-
-            var filesRestored = 0;
-            long bytesRestored = 0;
-            var total = _restoreFiles.Count;
-
-            foreach (var file in _restoreFiles.ToList())
-            {
-                var relative =
-                    file.RelativePath
-                        .Replace('/', Path.DirectorySeparatorChar)
-                        .Replace('\\', Path.DirectorySeparatorChar)
-                        .TrimStart(Path.DirectorySeparatorChar);
-
-                var targetPath =
-                    Path.GetFullPath(
-                        Path.Combine(destinationRoot, relative));
-
-                if (!targetPath.StartsWith(
-                        rootWithSeparator,
-                        StringComparison.OrdinalIgnoreCase))
-                {
-                    throw new InvalidOperationException(
-                        $"Refusing to restore outside the destination: {file.RelativePath}");
-                }
-
-                var index = filesRestored + 1;
-                var displayPath = file.RelativePath;
-
-                RestoreStatusText.Text =
-                    $"Restoring {index:N0} of {total:N0}: {displayPath}";
-
-                var progress = new Progress<long>(bytes =>
-                {
-                    RestoreStatusText.Text =
-                        $"Restoring {index:N0} of {total:N0}: {displayPath} • " +
-                        $"{FormatBytes(bytes)}";
-                });
-
-                var written =
-                    await _api.DownloadFileAsync(
-                        row.Job.Id,
-                        file.Id,
-                        targetPath,
-                        progress);
-
-                filesRestored++;
-                bytesRestored += written;
-            }
-
-            var result =
-                new BackupRestoreResultDto(
-                    row.Job.Id,
-                    destinationRoot,
-                    filesRestored,
-                    bytesRestored);
-
-            RestoreStatusText.Text =
-                $"Restore complete. {result.FilesRestored:N0} files restored. " +
-                $"{FormatBytes(result.BytesRestored)}.";
-
-            MessageBox.Show(
-                this,
-                $"Restore completed successfully." +
-                $"{Environment.NewLine}{Environment.NewLine}" +
-                $"Files restored: {result.FilesRestored:N0}" +
-                $"{Environment.NewLine}" +
-                $"Data restored: {FormatBytes(result.BytesRestored)}" +
-                $"{Environment.NewLine}" +
-                $"Location: {destinationRoot}",
-                "Restore Complete",
-                MessageBoxButton.OK,
-                MessageBoxImage.Information);
-        }
-        catch (Exception ex)
-        {
-            RestoreStatusText.Text =
-                "Restore failed.";
-
-            MessageBox.Show(
-                this,
-                ex.Message,
-                "Restore Failed",
-                MessageBoxButton.OK,
-                MessageBoxImage.Error);
-        }
-        finally
-        {
-            RestoreBackupButton.IsEnabled =
-                _restoreFiles.Count > 0;
-        }
-    }
-
-    private sealed class RestoreJobRow
-    {
-        public BackupJobDto Job { get; }
-
-        public string Display { get; }
-
-        public RestoreJobRow(BackupJobDto job)
-        {
-            Job = job;
-
-            var date =
-                (job.CompletedAtUtc ?? job.StartedAtUtc)
-                    .ToLocalTime();
-
-            Display =
-                $"{date:HH:mm:ss} - {FormatBytes(job.BytesUploaded)}";
-        }
-
-        public override string ToString()
-        {
-            return Display;
-        }
-    }
-
-    private sealed class RestoreFileRow
-    {
-        public string RelativePath { get; }
-
-        public string SizeDisplay =>
-            "Available";
-
-        public RestoreFileRow(BackupFileDto file)
-        {
-            RelativePath =
-                file.RelativePath;
-        }
-    }
-
-
     private void History_Click(
         object sender,
         RoutedEventArgs e)
     {
-        HistoryGrid.ItemsSource =
+        SetHistoryRows(
             _jobs
                 .OrderByDescending(
                     x => x.StartedAtUtc)
                 .Select(
                     x => new HistoryRow(x))
-                .ToList();
+                .ToList());
 
         ShowView(HistoryView);
+
+        // Show the cached list at once, then fetch the latest from the server.
+        _ = AutoRefreshAsync();
     }
 
 
@@ -1569,13 +1215,109 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (!_folders.Contains(
+        if (_folders.Contains(
                 selectedPath,
                 StringComparer.OrdinalIgnoreCase))
         {
-            _folders.Add(selectedPath);
-            UpdateFolderCount();
+            return;
         }
+
+        var updated = _folders.ToList();
+        updated.Add(selectedPath);
+
+        SaveFolders(updated);
+    }
+
+    private void RemoveFolder_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: string folder })
+        {
+            return;
+        }
+
+        if (_folders.Count <= 1)
+        {
+            MessageBox.Show(
+                this,
+                "At least one folder must stay in the backup.\n\n" +
+                "Add the new folder first, then remove this one.",
+                "ErongoIT Backup",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+
+            return;
+        }
+
+        var answer = MessageBox.Show(
+            this,
+            $"Stop backing up this folder?\n\n{folder}\n\n" +
+            "Nothing is deleted from this PC. Copies already on the backup " +
+            "server stay restorable until the plan's retention period removes them.",
+            "Remove folder",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Question,
+            MessageBoxResult.No);
+
+        if (answer != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        var updated = _folders
+            .Where(f => !string.Equals(f, folder, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        SaveFolders(updated);
+    }
+
+    /// <summary>
+    /// Saves the new folder list (registered PCs: into agent.json for the
+    /// backup service) and refreshes the screen. Nothing changes on screen
+    /// if saving fails or the admin prompt is declined.
+    /// </summary>
+    private void SaveFolders(
+        List<string> updated)
+    {
+        if (_options.IsEnrolled)
+        {
+            var result = FolderSettings.Save(
+                updated,
+                out var error);
+
+            if (result == FolderSettings.SaveResult.Cancelled)
+            {
+                return;
+            }
+
+            if (result == FolderSettings.SaveResult.Failed)
+            {
+                MessageBox.Show(
+                    this,
+                    $"The folder list could not be saved.\n\n{error}",
+                    "ErongoIT Backup",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+
+                return;
+            }
+        }
+
+        _folders.Clear();
+
+        foreach (var folder in updated)
+            _folders.Add(folder);
+
+        _options.SourcePaths = new List<string>(updated);
+        _options.SourcePath = string.Empty;
+
+        SourcePathText.Text =
+            updated.Count == 0
+                ? "Not configured"
+                : string.Join(Environment.NewLine, updated);
+
+        UpdateFolderCount();
     }
 
     private void UpdateFolderCount()

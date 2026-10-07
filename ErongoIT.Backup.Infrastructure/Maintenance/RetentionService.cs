@@ -102,8 +102,38 @@ public sealed class RetentionService : IRetentionService
                 jobs.Count - expired.Count));
         }
 
-        // Files that belong to the expired jobs.
-        var filesDeleted = 0;
+        // File versions that were replaced or deleted longer ago than the
+        // device's plan keeps history. Current versions are never removed.
+        var deviceRetention = await _db.Devices
+            .AsNoTracking()
+            .Select(d => new
+            {
+                d.Id,
+                RetentionDays = _db.BackupPlans
+                    .Where(p => p.Id == d.AssignedBackupPlanId)
+                    .Select(p => (int?)p.RetentionDays)
+                    .FirstOrDefault()
+            })
+            .ToListAsync(cancellationToken);
+
+        var versionsDeleted = 0;
+
+        foreach (var device in deviceRetention)
+        {
+            var versionCutoff = now.AddDays(-Math.Max(device.RetentionDays ?? 30, 1));
+
+            var expiredVersions = _db.FileVersions
+                .Where(v => v.DeviceId == device.Id &&
+                            v.ValidToUtc != null &&
+                            v.ValidToUtc < versionCutoff);
+
+            versionsDeleted += dryRun
+                ? await expiredVersions.CountAsync(cancellationToken)
+                : await expiredVersions.ExecuteDeleteAsync(cancellationToken);
+        }
+
+        // Files that belong to the expired jobs (plus expired versions).
+        var filesDeleted = versionsDeleted;
 
         foreach (var batch in deleteIds.Chunk(BatchSize))
         {
@@ -131,6 +161,7 @@ public sealed class RetentionService : IRetentionService
             .Where(c => !_db.BackupFiles.Any(f =>
                 f.BackupContentId == c.Id &&
                 !deleteIds.Contains(f.BackupJobId)))
+            .Where(c => !_db.FileVersions.Any(v => v.BackupContentId == c.Id))
             .Select(c => new { c.Id, c.Sha256, c.SizeBytes })
             .ToListAsync(cancellationToken);
 
@@ -172,6 +203,7 @@ public sealed class RetentionService : IRetentionService
                 var stillUnreferenced = await _db.BackupContents
                     .Where(c => ids.Contains(c.Id))
                     .Where(c => !_db.BackupFiles.Any(f => f.BackupContentId == c.Id))
+                    .Where(c => !_db.FileVersions.Any(v => v.BackupContentId == c.Id))
                     .Select(c => new { c.Id, c.Sha256, c.SizeBytes })
                     .ToListAsync(cancellationToken);
 

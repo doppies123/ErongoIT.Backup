@@ -64,6 +64,34 @@ public interface IBackupApiClient
         string errorMessage,
         CancellationToken cancellationToken = default);
 
+    // ---- File versions (incremental backup) ----
+
+    /// <summary>Returns the SHA-256 hashes the server does not have yet.</summary>
+    Task<IReadOnlyList<string>> CheckContentAsync(
+        Guid deviceId,
+        IReadOnlyList<ContentReferenceDto> contents,
+        CancellationToken cancellationToken = default);
+
+    Task UploadContentAsync(
+        Guid deviceId,
+        string sha256,
+        Stream content,
+        string? encoding,
+        CancellationToken cancellationToken = default);
+
+    Task<ApplyChangesResultDto> ApplyChangesAsync(
+        Guid deviceId,
+        Guid? backupJobId,
+        IReadOnlyList<FileChangeDto> changed,
+        IReadOnlyList<string> deleted,
+        CancellationToken cancellationToken = default);
+
+    Task<CurrentStatePageDto> GetSyncStateAsync(
+        Guid deviceId,
+        string? afterPath,
+        int take,
+        CancellationToken cancellationToken = default);
+
     Task SendHeartbeatAsync(
         Guid deviceId,
         string? agentVersion,
@@ -79,7 +107,35 @@ public sealed record DeviceDto(
     string? AgentVersion,
     DateTime? LastSeenAtUtc,
     bool IsActive,
-    Guid? AssignedBackupPlanId);
+    Guid? AssignedBackupPlanId,
+    DateTime? BackupRequestedAtUtc = null);
+
+public sealed record ContentReferenceDto(
+    string Sha256,
+    long SizeBytes);
+
+public sealed record FileChangeDto(
+    string Path,
+    string Sha256,
+    long SizeBytes,
+    DateTime? LastWriteUtc);
+
+public sealed record ApplyChangesResultDto(
+    int Added,
+    int Changed,
+    int Unchanged,
+    int Deleted,
+    IReadOnlyList<string> MissingContentPaths);
+
+public sealed record CurrentFileDto(
+    string Path,
+    string Sha256,
+    long SizeBytes,
+    DateTime? LastWriteUtc);
+
+public sealed record CurrentStatePageDto(
+    IReadOnlyList<CurrentFileDto> Files,
+    string? NextAfterPath);
 
 public sealed record BackupPlanDto(
     Guid Id,

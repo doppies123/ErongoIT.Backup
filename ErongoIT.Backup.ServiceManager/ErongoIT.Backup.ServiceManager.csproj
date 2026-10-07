@@ -6,6 +6,13 @@
     <UseWPF>true</UseWPF>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Reuses AgentConfigFile (agent.json + DPAPI device key). -->
+    <ProjectReference Include="..\ErongoIT.Backup.Agent\ErongoIT.Backup.Agent.csproj" />
+    <PackageReference Include="System.ServiceProcess.ServiceController" Version="10.0.0" />
+  </ItemGroup>
 
 </Project>

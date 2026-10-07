@@ -9,6 +9,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - erongoit_backup_postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
@@ -35,22 +37,8 @@ services:
       ASPNETCORE_URLS: "http://+:8080"
     volumes:
       - ./backup-storage:/app/storage
-
-  web:
-    build:
-      context: .
-      dockerfile: ErongoIT.Backup.Web/Dockerfile
-    image: erongoit-backup-web:latest
-    container_name: erongoit-backup-web
-    restart: unless-stopped
-    depends_on:
-      - api
-    environment:
-      BackupApi__BaseUrl: "http://api:8080/"
-      ASPNETCORE_ENVIRONMENT: "Production"
-      ASPNETCORE_URLS: "http://+:8080"
     ports:
-      - "5165:8080"
+      - "5230:8080"
 
 volumes:
   erongoit_backup_postgres_data:
