@@ -9,7 +9,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>ErongoIT.Backup.Agent.Gui</AssemblyName>
-    <Version>1.1.0</Version>
+    <Version>1.3.1</Version>
     <NoWarn>$(NoWarn);CA1416</NoWarn>
     <!-- ErongoIT logo: exe, taskbar, desktop/Start-menu shortcuts. -->
     <ApplicationIcon>app.ico</ApplicationIcon>
@@ -36,6 +36,11 @@
     <!-- Developer-only GUI profiles. Copied for local runs, never published. -->
     <None Update="agentgui.local.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Never" />
     <None Update="agentgui.vps.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Never" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Shown under Settings > What's new; shipped by the installer. -->
+    <None Include="..\CHANGELOG.md" Link="CHANGELOG.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

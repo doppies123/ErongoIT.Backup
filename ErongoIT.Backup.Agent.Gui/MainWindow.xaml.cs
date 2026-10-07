@@ -46,7 +46,9 @@ public partial class MainWindow : Window
         SettingsModeText.Text = _options.IsEnrolled
             ? "Registered PC (device key in C:\\ProgramData\\ErongoIT Backup\\agent.json)"
             : "Developer profile (admin login)";
-        FooterVersion.Text = "Agent 1.3.1";
+        FooterVersion.Text = "Agent " + AppVersion;
+
+        WhatsNewText.Text = LoadChangelog();
 
         // Show every configured folder, including ones that no longer
         // exist, so they can still be removed.
@@ -62,6 +64,42 @@ public partial class MainWindow : Window
         InitializeAutoRefresh();
 
         _ = LoadDataAsync();
+    }
+
+    /// <summary>Version set by the installer build (-p:Version=x.y.z).</summary>
+    private static string AppVersion
+    {
+        get
+        {
+            var version = typeof(MainWindow).Assembly.GetName().Version;
+            return version is null ? "?" : $"{version.Major}.{version.Minor}.{version.Build}";
+        }
+    }
+
+    private static string LoadChangelog()
+    {
+        try
+        {
+            var path = Path.Combine(AppContext.BaseDirectory, "CHANGELOG.md");
+
+            if (!File.Exists(path))
+                return "No release notes found.";
+
+            // Plain-text view of the Markdown: drop heading marks.
+            return string.Join(
+                Environment.NewLine,
+                File.ReadAllLines(path)
+                    .Select(line => line.StartsWith("# ")
+                        ? line[2..].ToUpperInvariant()
+                        : line.StartsWith("## ")
+                            ? Environment.NewLine + line[3..]
+                            : line))
+                .Trim();
+        }
+        catch (Exception ex)
+        {
+            return $"Release notes could not be loaded: {ex.Message}";
+        }
     }
 
     private static GuiOptions LoadOptions()

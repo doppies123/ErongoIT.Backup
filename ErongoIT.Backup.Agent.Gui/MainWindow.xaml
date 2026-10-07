@@ -1103,6 +1103,31 @@
 
                         </Border>
 
+                        <Border Background="White"
+                                CornerRadius="6"
+                                Padding="22"
+                                Margin="0,18,0,0">
+
+                            <StackPanel>
+
+                                <TextBlock Text="What's new"
+                                           FontSize="17"
+                                           FontWeight="SemiBold"/>
+
+                                <TextBox x:Name="WhatsNewText"
+                                         Margin="0,14,0,0"
+                                         MaxHeight="320"
+                                         IsReadOnly="True"
+                                         BorderThickness="0"
+                                         Background="Transparent"
+                                         TextWrapping="Wrap"
+                                         VerticalScrollBarVisibility="Auto"
+                                         FontSize="13"/>
+
+                            </StackPanel>
+
+                        </Border>
+
                     </StackPanel>
 
                 </ScrollViewer>

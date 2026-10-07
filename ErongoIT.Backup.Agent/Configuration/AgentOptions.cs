@@ -20,7 +20,7 @@ public sealed class AgentOptions
 
     public Guid BackupPlanId { get; set; }
 
-    public string AgentVersion { get; set; } = "1.2.0";
+    public string AgentVersion { get; set; } = "1.3.1";
 
     /// <summary>Single folder (older configuration).</summary>
     public string SourcePath { get; set; } = string.Empty;
