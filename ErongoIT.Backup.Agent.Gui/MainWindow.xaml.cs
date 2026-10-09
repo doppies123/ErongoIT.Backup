@@ -63,6 +63,8 @@ public partial class MainWindow : Window
 
         InitializeAutoRefresh();
 
+        InitializeUpdates();
+
         _ = LoadDataAsync();
     }
 

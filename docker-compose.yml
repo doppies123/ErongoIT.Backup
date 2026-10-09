@@ -37,6 +37,7 @@ services:
       ASPNETCORE_URLS: "http://+:8080"
     volumes:
       - ./backup-storage:/app/storage
+      - ./updates:/app/updates:ro
     ports:
       - "5230:8080"
 

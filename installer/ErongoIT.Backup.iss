@@ -73,6 +73,11 @@ Name: "{group}\Backup logs";          Filename: "{commonappdata}\ErongoIT Backup
 Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#AppName}";     Filename: "{app}\Gui\{#GuiExe}"; Tasks: desktopicon
 
+[Registry]
+; Start the tray app at every Windows sign-in (all users): it shows backup
+; status and offers agent updates. "--tray" keeps the window hidden.
+Root: HKLM; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "ErongoIT Backup"; ValueData: """{app}\Gui\{#GuiExe}"" --tray"; Flags: uninsdeletevalue
+
 [Run]
 ; Offered on the Finish page; opened as the normal (non-admin) user.
 Filename: "{app}\Gui\{#GuiExe}"; Description: "Open {#AppName}"; Flags: postinstall nowait skipifsilent runasoriginaluser

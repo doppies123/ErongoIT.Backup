@@ -1110,6 +1110,54 @@
 
                             <StackPanel>
 
+                                <TextBlock Text="Updates"
+                                           FontSize="17"
+                                           FontWeight="SemiBold"/>
+
+                                <TextBlock x:Name="UpdateCurrentVersionText"
+                                           Text="Installed version:"
+                                           Margin="0,14,0,0"/>
+
+                                <TextBlock x:Name="UpdateStatusText"
+                                           Text=""
+                                           Foreground="#68717C"
+                                           TextWrapping="Wrap"
+                                           Margin="0,4,0,0"/>
+
+                                <ProgressBar x:Name="UpdateProgress"
+                                             Height="6"
+                                             Margin="0,10,0,0"
+                                             Visibility="Collapsed"/>
+
+                                <StackPanel Orientation="Horizontal"
+                                            Margin="0,14,0,0">
+
+                                    <Button Content="Check for updates"
+                                            Padding="14,6"
+                                            Click="CheckForUpdates_Click"/>
+
+                                    <Button x:Name="InstallUpdateButton"
+                                            Content="Update"
+                                            Padding="16,6"
+                                            Margin="10,0,0,0"
+                                            Background="#1F6FD1"
+                                            Foreground="White"
+                                            Visibility="Collapsed"
+                                            Click="InstallUpdate_Click"/>
+
+                                </StackPanel>
+
+                            </StackPanel>
+
+                        </Border>
+
+                        <Border Background="White"
+                                CornerRadius="6"
+                                Padding="22"
+                                Margin="0,18,0,0">
+
+                            <StackPanel>
+
                                 <TextBlock Text="What's new"
                                            FontSize="17"
                                            FontWeight="SemiBold"/>

@@ -36,6 +36,17 @@ public partial class App : System.Windows.Application
             File.Exists(Path.Combine(AppContext.BaseDirectory, "agentgui.vps.json")) ||
             File.Exists(Path.Combine(AppContext.BaseDirectory, "agentgui.local.json"));
 
+        // Started by Windows at sign-in: live quietly in the tray.
+        var trayStart = args.Any(a =>
+            string.Equals(a, "--tray", StringComparison.OrdinalIgnoreCase));
+
+        if (trayStart && !AgentConfigFile.Exists && !developerProfile)
+        {
+            // Not registered yet: never pop up the setup at sign-in.
+            Shutdown();
+            return;
+        }
+
         if (setupRequested || (!AgentConfigFile.Exists && !developerProfile))
         {
             new SetupWindow().Show();
@@ -48,12 +59,17 @@ public partial class App : System.Windows.Application
 
         if (!isFirstInstance)
         {
-            try
+            // Already running. A sign-in start stays quiet; a normal start
+            // brings the existing window forward.
+            if (!trayStart)
             {
-                EventWaitHandle.OpenExisting(ShowEventName).Set();
-            }
-            catch
-            {
+                try
+                {
+                    EventWaitHandle.OpenExisting(ShowEventName).Set();
+                }
+                catch
+                {
+                }
             }
 
             Shutdown();
@@ -70,7 +86,10 @@ public partial class App : System.Windows.Application
             Timeout.Infinite,
             executeOnlyOnce: false);
 
-        new MainWindow().Show();
+        var window = new MainWindow();
+
+        if (!trayStart)
+            window.Show();
     }
 
     protected override void OnExit(ExitEventArgs e)

@@ -662,6 +662,70 @@ public sealed class BackupGuiApiClient
         }
     }
 
+    // ------------------------------------------------------------
+    // Agent updates
+    // ------------------------------------------------------------
+
+    /// <summary>The newest published version, or null when none is published.</summary>
+    public async Task<UpdateInfoDto?> GetLatestUpdateAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.GetAsync("api/updates/latest", cancellationToken);
+
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            return null;
+
+        await EnsureSuccessAsync(response, cancellationToken);
+
+        return await response.Content.ReadFromJsonAsync<UpdateInfoDto>(JsonOptions, cancellationToken);
+    }
+
+    /// <summary>Downloads the installer, reporting progress 0..1.</summary>
+    public async Task DownloadUpdateAsync(
+        UpdateInfoDto update,
+        string destinationPath,
+        IProgress<double>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await _httpClient.GetAsync(
+            $"api/updates/download/{Uri.EscapeDataString(update.FileName)}",
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
+
+        await EnsureSuccessAsync(response, cancellationToken);
+
+        var total = response.Content.Headers.ContentLength ?? update.SizeBytes;
+        var temporaryPath = destinationPath + ".download";
+
+        try
+        {
+            await using (var source = await response.Content.ReadAsStreamAsync(cancellationToken))
+            await using (var target = new FileStream(
+                temporaryPath, FileMode.Create, FileAccess.Write, FileShare.None, 1024 * 1024, useAsync: true))
+            {
+                var buffer = new byte[256 * 1024];
+                long written = 0;
+                int read;
+
+                while ((read = await source.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken)) > 0)
+                {
+                    await target.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+                    written += read;
+
+                    if (total > 0)
+                        progress?.Report(Math.Min(1.0, (double)written / total));
+                }
+            }
+
+            File.Move(temporaryPath, destinationPath, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath))
+                File.Delete(temporaryPath);
+        }
+    }
+
     private static string AsOfQuery(DateTime? asOfUtc) =>
         asOfUtc is null
             ? string.Empty
@@ -765,3 +829,11 @@ public sealed record FolderListingDto(
     DateTime AsOfUtc,
     IReadOnlyList<FolderItemDto> Folders,
     IReadOnlyList<VersionItemDto> Files);
+
+public sealed record UpdateInfoDto(
+    string Version,
+    string FileName,
+    string Sha256,
+    long SizeBytes,
+    DateTime ReleasedUtc,
+    string? Notes);

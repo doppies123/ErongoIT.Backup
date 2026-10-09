@@ -19,6 +19,11 @@ public sealed class GuiSettings
 
     public int RowsPerPage { get; set; } = DefaultRowsPerPage;
 
+    /// <summary>Last update offered with a popup, and when ("Later" = ask again next day).</summary>
+    public string? UpdatePromptedVersion { get; set; }
+
+    public DateTime? UpdatePromptedUtc { get; set; }
+
     private static string SettingsPath =>
         Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
